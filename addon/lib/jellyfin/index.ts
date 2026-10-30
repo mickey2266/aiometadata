@@ -2435,7 +2435,10 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       return;
     }
     const maxWidth = qInt(req, 'MaxWidth', 0) || qInt(req, 'FillWidth', 0) || qInt(req, 'Width', 0);
-    url = sourceSized(url, kind, maxWidth);
+    // Wide-tagged primaries that fall back to the backdrop are catalog tiles, so they keep the old sizing.
+    const fullBackdrop = requested === 'backdrop';
+    url = sourceSized(url, kind, maxWidth, fullBackdrop);
+    if (fullBackdrop) logger.debug(`backdrop ${req.params.itemId} width=${maxWidth || 'none'} -> ${url}`);
     const descriptor = await decodeJellyfinId(String(req.params.itemId));
     const collectionArt = descriptor?.k === 'collection' || descriptor?.k === 'boxset';
 
@@ -2502,8 +2505,10 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     url.startsWith('https://image.tmdb.org/t/p/') || METAHUB.test(url) || url.startsWith(FANART_PREVIEW);
 
   /** The source's own smallest rendition at least as wide as asked, never larger than the link names. */
-  const sourceSized = (url: string, kind: string, maxWidth: number): string => {
+  const sourceSized = (url: string, kind: string, maxWidth: number, fullBackdrop = false): string => {
     if (url.includes(TMDB_ORIGINAL)) {
+      // A backdrop asked for without a width gets the same file the Stremio path serves.
+      if (fullBackdrop && !(maxWidth > 0)) return url;
       const bucket = kind === 'logo' ? 'logo' : kind === 'backdrop' || kind === 'thumb' ? 'backdrop' : 'poster';
       const widths = TMDB_WIDTHS[bucket];
       const wanted = maxWidth > 0 ? maxWidth : bucket === 'backdrop' ? 1280 : bucket === 'logo' ? 500 : 780;
