@@ -1753,12 +1753,13 @@ class Database {
     await this.runQuery(query, [userUUID, profile, videoId]);
   }
 
-  async redateWatch(userUUID: string, profile: string, videoIds: string[], from: number | null, to: number, withinMs: number, merge = false): Promise<{ moved: number; latestBefore: number | null; latestAfter: number | null }> {
+  async redateWatch(userUUID: string, profile: string, videoIds: string[], from: number | null, to: number, withinMs: number, merge = false): Promise<{ moved: number; latestBefore: number | null; latestAfter: number | null; apart: boolean }> {
     const sqlite = this.type === 'sqlite';
     const ids = [...new Set(videoIds)];
     const latestOf = (rows: Array<{ watched_at: number }>) => (rows.length ? Math.max(...rows.map((row) => row.watched_at)) : null);
     const before = await this.listWatchesFor(userUUID, profile, ids, true);
     let moved = 0;
+    let apart = false;
     for (const id of ids) {
       const own = before.filter((row) => row.video_id === id);
       let origin: string | null;
@@ -1790,6 +1791,7 @@ class Database {
           continue;
         }
         // Another viewing already at that moment keeps its own row, one millisecond apart.
+        if (own.some((row) => row !== pick && Math.abs(row.watched_at - to) <= withinMs)) apart = true;
         let at = Math.round(to);
         while (own.some((row) => row !== pick && row.watched_at === at)) at += 1;
         const result = await this.runQuery(
@@ -1809,7 +1811,7 @@ class Database {
       );
       moved += 1;
     }
-    const after = moved ? await this.listWatchesFor(userUUID, profile, ids) : before;
+    const after = moved ? await this.listWatchesFor(userUUID, profile, ids, true) : before;
     if (moved) {
       const now = Date.now();
       for (const id of ids) {
@@ -1823,7 +1825,7 @@ class Database {
         );
       }
     }
-    return { moved, latestBefore: latestOf(before), latestAfter: latestOf(after) };
+    return { moved, latestBefore: latestOf(before), latestAfter: latestOf(after), apart };
   }
 
   /** primary for a read whose rows a write is about to change. */
