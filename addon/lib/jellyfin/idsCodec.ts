@@ -1,16 +1,20 @@
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { LRUCache } from 'lru-cache';
 import { envInt } from '../../utils/envNumber';
 
 const PACKED = 0xa1;
 const HASHED = 0xb2;
+// A playlist id is its own marker plus random bytes, as AIOStreams spells it, so
+// it decodes without a lookup and never collides with a packed or hashed id.
+const PLAYLIST = 0xa8;
 const CODEC_VERSION = 1;
 const NONE16 = 0xffff;
 const MAX48 = 2 ** 48 - 1;
 
 export type PackableKind = 'movie' | 'series' | 'season' | 'episode';
 export type HashedKind = 'view' | 'genre' | 'person' | 'studio' | 'collection' | 'boxset' | 'marker';
-export type JellyfinKind = PackableKind | HashedKind;
+export type PlaylistKind = 'playlist' | 'playlists';
+export type JellyfinKind = PackableKind | HashedKind | PlaylistKind;
 
 export type Descriptor =
   | { k: 'movie' | 'series'; t: string; i: string }
@@ -24,7 +28,10 @@ export type Descriptor =
   | { k: 'collection'; c: string }
   | { k: 'boxset'; c: string; f: string }
   /** The picker entry that resolves an item's versions when chosen. */
-  | { k: 'marker'; i: string };
+  | { k: 'marker'; i: string }
+  /** A user's playlist, `p` being its own id, and the folder holding them all. */
+  | { k: 'playlist'; p: string }
+  | { k: 'playlists' };
 
 const KIND_CODES: Record<PackableKind, number> = {
   movie: 1,
@@ -262,6 +269,10 @@ export function canonicalDescriptor(d: Descriptor): string {
       return `boxset|${d.c}|${d.f}`;
     case 'marker':
       return `marker|${d.i}`;
+    case 'playlist':
+      return `playlist|${d.p}`;
+    case 'playlists':
+      return 'playlists';
   }
 }
 
@@ -278,12 +289,32 @@ export function dashedGuid(hex32: string): string {
 const MARKER = 0xc3;
 const PACKED_PREFIX = PACKED.toString(16);
 const MARKER_PREFIX = MARKER.toString(16);
+const PLAYLIST_PREFIX = PLAYLIST.toString(16);
+
+/** The Playlists folder, one fixed id under the playlist marker. */
+export const PLAYLISTS_FOLDER_ID = `${PLAYLIST_PREFIX}${createHash('md5').update('playlists').digest('hex').slice(2)}`;
+
+export function newPlaylistId(): string {
+  for (;;) {
+    const buf = randomBytes(16);
+    buf[0] = PLAYLIST;
+    const id = buf.toString('hex');
+    if (id !== PLAYLISTS_FOLDER_ID) return id;
+  }
+}
+
+export function isPlaylistJellyfinId(id: string): boolean {
+  const normal = normaliseJellyfinId(id);
+  return /^[0-9a-f]{32}$/.test(normal) && normal.startsWith(PLAYLIST_PREFIX);
+}
 
 export function packJellyfinId(d: Descriptor): string | null {
   if (d.k === 'marker') {
     const inner = normaliseJellyfinId(d.i);
     return inner.startsWith(PACKED_PREFIX) && inner.length === 32 ? `${MARKER_PREFIX}${inner.slice(2)}` : null;
   }
+  if (d.k === 'playlists') return PLAYLISTS_FOLDER_ID;
+  if (d.k === 'playlist') return isPlaylistJellyfinId(d.p) ? normaliseJellyfinId(d.p) : null;
   return tryPack(d);
 }
 
@@ -291,6 +322,7 @@ export function unpackJellyfinId(raw: string): Descriptor | null {
   const id = normaliseJellyfinId(raw);
   if (!/^[0-9a-f]{32}$/.test(id)) return null;
   if (id.startsWith(MARKER_PREFIX)) return { k: 'marker', i: `${PACKED_PREFIX}${id.slice(2)}` };
+  if (id.startsWith(PLAYLIST_PREFIX)) return id === PLAYLISTS_FOLDER_ID ? { k: 'playlists' } : { k: 'playlist', p: id };
   return tryUnpack(id);
 }
 

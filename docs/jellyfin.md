@@ -315,7 +315,7 @@ Clients differ in what they ask for, and a few things are worth knowing when a r
 - **Next Up** with resumable episodes excluded, as some clients ask, shows only episodes not yet started; a half-watched one is in Continue Watching instead.
 - **Upcoming** has no window parameter in the Jellyfin API; `JELLYFIN_UPCOMING_DAYS` sets it server-side.
 - **Favourites** is the watchlist. Not every client offers a remove-from-favourites action on every screen; the title page's heart is the reliable place.
-- **Playlists** are not served. A client that offers to play a favourite rather than open it is treating the row as a playlist; use the Favourites view.
+- **Playlists** are made and edited in the client, through Jellyfin's own `/Playlists` API, and kept on this server for each user. A Playlists folder joins the libraries once a user has one. As in AIOStreams, a title is in a playlist once; adding a show or season adds its aired episodes, and adding a collection adds its films. A user holds up to 200 playlists of up to 1000 titles each. Playlists are not shared between users.
 - **Web clients** cache the server's views; a library that was just tagged away or added appears after a reload.
 - **AIOStreams' web app** finds more to offer on this server than on plain Jellyfin: the server logo and a link to your configuration, switching between users, marking a show watched up to an episode in one step, dropping a show, the stream addon's own name and description for each version, and looking the versions up again. Switching from any user but the first asks for the configuration password, since another user may be kept to some catalogs or a rating.
 

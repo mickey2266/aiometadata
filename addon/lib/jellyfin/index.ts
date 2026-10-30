@@ -57,6 +57,7 @@ import { oneIdAsked, withCriticRatings } from './criticRatings';
 import { ImageQueueFull, SIZED_WIDTH, imageQueueFull, inImageSlot, shrinkToWidth, widthStep } from '../posterCache/resize';
 import { IMAGE_CSP } from '../posterCache/proxyResponse';
 import { registerStubs } from './stubs';
+import { hasPlaylists, playlistImagesById, playlistItemById, playlistsFolder, registerPlaylists, type PlaylistDeps } from './playlists';
 import { noteWantsPeople } from './viewer';
 import { decodeCursor, exportRow, findUser, historyPage, historyUsers, isEpisodeVideo, itemIdForVideo, userByKey, videoIdsOf } from './history';
 import { forgetUserSettings, liveSessionsFor, recordPlayed, recordPlayedUpTo, recordPlaying, recordProgress, recordStopped, recordUnplayed, recordUserData, sessionTouchDue, touchSessions, type LiveSession } from './playstate';
@@ -983,6 +984,8 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       return;
     }
     const views = await buildViews(userUUID, serverIdFor(userUUID), config);
+    // As in Jellyfin, the Playlists folder shows once the user has a playlist.
+    if (await hasPlaylists(req, config)) views.push(playlistsFolder(serverIdFor(userUUID)));
     res.json(itemList(views, views.length, 0));
   };
   router.get(['/Users/:userId/Views', '/UserViews'], viewsHandler);
@@ -1031,6 +1034,26 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const parsed = parseInt(String(raw), 10);
     return Number.isFinite(parsed) ? parsed : fallback;
   };
+
+  // A playlist entry is built as the single-item route builds it, watched state included.
+  const playlistDeps: PlaylistDeps = {
+    buildItem: async (req: any, itemId: string) => {
+      const captured: any[] = [];
+      // query and params are prototype getters, so a spread would lose them.
+      const forged = Object.create(req, {
+        params: { value: { ...req.params, itemId, listed: true }, enumerable: true },
+        query: { value: req.query, enumerable: true },
+      });
+      await singleItemHandler(
+        forged,
+        { json: (body: any) => captured.push(body), status: () => ({ json: () => undefined, end: () => undefined }) }
+      );
+      return captured[0]?.Id ? captured[0] : null;
+    },
+    imagesFor: (req: any, itemId: string) => imagesFor(req, itemId),
+  };
+  // Ahead of the library's /Items, which it hands anything not about playlists.
+  registerPlaylists(router, playlistDeps);
 
   router.get(['/Items', '/Users/:userId/Items'], async (req: any, res: any) => {
     const userUUID = req.params.userUUID;
@@ -2414,6 +2437,8 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       else await boxSetsDeep(userUUID, config, scope, collection);
       return recallImages(scope, itemId);
     }
+
+    if (descriptor.k === 'playlist') return playlistImagesById(req, playlistDeps, descriptor.p);
 
     return undefined;
   };
@@ -3978,6 +4003,16 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
         return;
       }
       res.json(catalogView(catalog, serverIdFor(userUUID), rowFor(config, catalog)));
+      return;
+    }
+
+    if (descriptor.k === 'playlist' || descriptor.k === 'playlists') {
+      const item = await playlistItemById(req, playlistDeps, descriptor);
+      if (!item) {
+        res.status(404).json({ Message: 'Item not found' });
+        return;
+      }
+      res.json(item);
       return;
     }
 

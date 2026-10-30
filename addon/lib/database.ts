@@ -17,6 +17,15 @@ export interface WatchPatch {
 
 type DbType = 'sqlite' | 'postgres';
 
+/** A Jellyfin playlist: its entries are item ids, in order. */
+export interface PlaylistRecord {
+  id: string;
+  name: string;
+  items: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 // A row a tracker sync wrote rather than a play here: a tracker's origin, or an
 // unmarked row whose last play is not when it was written.
 const IMPORTED_PLAYSTATE = `(origin IS NOT NULL AND origin NOT IN ('server', 'play'))
@@ -458,6 +467,16 @@ class Database {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (user_uuid, profile, meta_id)
       )`,
+      `CREATE TABLE IF NOT EXISTS jellyfin_playlists (
+        id TEXT PRIMARY KEY,
+        user_uuid TEXT NOT NULL,
+        profile TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL,
+        items TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_jellyfin_playlists_owner ON jellyfin_playlists(user_uuid, profile)`,
       `CREATE TABLE IF NOT EXISTS jellyfin_tracker_mirror (
         source_key TEXT NOT NULL,
         item_key TEXT NOT NULL,
@@ -773,6 +792,16 @@ class Database {
         updated_at BIGINT NOT NULL,
         PRIMARY KEY (user_uuid, profile, meta_id)
       )`,
+      `CREATE TABLE IF NOT EXISTS jellyfin_playlists (
+        id TEXT PRIMARY KEY,
+        user_uuid VARCHAR(64) NOT NULL,
+        profile TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL,
+        items TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_jellyfin_playlists_owner ON jellyfin_playlists(user_uuid, profile)`,
       `CREATE TABLE IF NOT EXISTS jellyfin_tracker_mirror (
         source_key VARCHAR(64) NOT NULL,
         item_key TEXT NOT NULL,
@@ -2142,6 +2171,143 @@ class Database {
       ? 'SELECT meta_id, media_type, meta_type, listed, updated_at FROM jellyfin_watchlist WHERE user_uuid = ? AND profile = ? ORDER BY updated_at DESC'
       : 'SELECT meta_id, media_type, meta_type, listed, updated_at FROM jellyfin_watchlist WHERE user_uuid = $1 AND profile = $2 ORDER BY updated_at DESC';
     return this.allQuery(query, [userUUID, profile]);
+  }
+
+  private playlistFromRow(row: any): PlaylistRecord {
+    let items: string[] = [];
+    try {
+      const parsed: unknown = JSON.parse(String(row.items ?? '[]'));
+      if (Array.isArray(parsed)) items = parsed.filter((i): i is string => typeof i === 'string');
+    } catch { /* an unreadable list is an empty one */ }
+    return { id: row.id, name: row.name, items, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at) };
+  }
+
+  async listPlaylists(userUUID: string, profile: string): Promise<PlaylistRecord[]> {
+    const query = this.type === 'sqlite'
+      ? 'SELECT id, name, items, created_at, updated_at FROM jellyfin_playlists WHERE user_uuid = ? AND profile = ? ORDER BY created_at'
+      : 'SELECT id, name, items, created_at, updated_at FROM jellyfin_playlists WHERE user_uuid = $1 AND profile = $2 ORDER BY created_at';
+    return ((await this.allPrimaryQuery(query, [userUUID, profile])) || []).map((row: any) => this.playlistFromRow(row));
+  }
+
+  async hasPlaylists(userUUID: string, profile: string): Promise<boolean> {
+    const query = this.type === 'sqlite'
+      ? 'SELECT 1 AS found FROM jellyfin_playlists WHERE user_uuid = ? AND profile = ? LIMIT 1'
+      : 'SELECT 1 AS found FROM jellyfin_playlists WHERE user_uuid = $1 AND profile = $2 LIMIT 1';
+    return (await this.allPrimaryQuery(query, [userUUID, profile])).length > 0;
+  }
+
+  /** Someone else's playlist is null, as one that doesn't exist is. */
+  async getPlaylist(userUUID: string, profile: string, id: string): Promise<PlaylistRecord | null> {
+    const query = this.type === 'sqlite'
+      ? 'SELECT id, name, items, created_at, updated_at FROM jellyfin_playlists WHERE id = ? AND user_uuid = ? AND profile = ?'
+      : 'SELECT id, name, items, created_at, updated_at FROM jellyfin_playlists WHERE id = $1 AND user_uuid = $2 AND profile = $3';
+    const [row] = await this.allPrimaryQuery(query, [id, userUUID, profile]);
+    return row ? this.playlistFromRow(row) : null;
+  }
+
+  /** Null once the profile has as many playlists as `limit` allows. */
+  async createPlaylist(userUUID: string, profile: string, playlist: { id: string; name: string; items: string[] }, limit: number): Promise<PlaylistRecord | null> {
+    if (!this.initialized) await this.initialize();
+    const now = Date.now();
+    const created: PlaylistRecord = { ...playlist, createdAt: now, updatedAt: now };
+    const items = JSON.stringify(playlist.items);
+
+    if (this.type === 'sqlite') {
+      return this.db.transaction(() => {
+        const { count } = this.db.prepare('SELECT COUNT(*) AS count FROM jellyfin_playlists WHERE user_uuid = ? AND profile = ?').get(userUUID, profile);
+        if (Number(count) >= limit) return null;
+        this.db.prepare('INSERT INTO jellyfin_playlists (id, user_uuid, profile, name, items, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(playlist.id, userUUID, profile, playlist.name, items, now, now);
+        return created;
+      })();
+    }
+
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      // Two creates at once would both see room under the limit without this.
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`jellyfin_playlists:${userUUID}:${profile}`]);
+      const counted = await client.query('SELECT COUNT(*) AS count FROM jellyfin_playlists WHERE user_uuid = $1 AND profile = $2', [userUUID, profile]);
+      if (Number(counted.rows[0]?.count) >= limit) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      await client.query(
+        'INSERT INTO jellyfin_playlists (id, user_uuid, profile, name, items, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [playlist.id, userUUID, profile, playlist.name, items, now, now]
+      );
+      await client.query('COMMIT');
+      return created;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Applies `change` to the stored playlist inside one transaction, so edits from
+   * two devices never overwrite each other. `change` returns null to leave it as
+   * it is; the result is null only when there is no such playlist.
+   */
+  async updatePlaylist(
+    userUUID: string,
+    profile: string,
+    id: string,
+    change: (playlist: PlaylistRecord) => Partial<Pick<PlaylistRecord, 'name' | 'items'>> | null
+  ): Promise<PlaylistRecord | null> {
+    if (!this.initialized) await this.initialize();
+
+    if (this.type === 'sqlite') {
+      return this.db.transaction(() => {
+        const row = this.db.prepare('SELECT id, name, items, created_at, updated_at FROM jellyfin_playlists WHERE id = ? AND user_uuid = ? AND profile = ?').get(id, userUUID, profile);
+        if (!row) return null;
+        const current = this.playlistFromRow(row);
+        const patch = change(current);
+        if (!patch) return current;
+        const next = { ...current, ...patch, updatedAt: Date.now() };
+        this.db.prepare('UPDATE jellyfin_playlists SET name = ?, items = ?, updated_at = ? WHERE id = ?')
+          .run(next.name, JSON.stringify(next.items), next.updatedAt, id);
+        return next;
+      })();
+    }
+
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const found = await client.query(
+        'SELECT id, name, items, created_at, updated_at FROM jellyfin_playlists WHERE id = $1 AND user_uuid = $2 AND profile = $3 FOR UPDATE',
+        [id, userUUID, profile]
+      );
+      if (!found.rows[0]) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const current = this.playlistFromRow(found.rows[0]);
+      const patch = change(current);
+      if (!patch) {
+        await client.query('ROLLBACK');
+        return current;
+      }
+      const next = { ...current, ...patch, updatedAt: Date.now() };
+      await client.query('UPDATE jellyfin_playlists SET name = $1, items = $2, updated_at = $3 WHERE id = $4', [next.name, JSON.stringify(next.items), next.updatedAt, id]);
+      await client.query('COMMIT');
+      return next;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async removePlaylist(userUUID: string, profile: string, id: string): Promise<boolean> {
+    const query = this.type === 'sqlite'
+      ? 'DELETE FROM jellyfin_playlists WHERE id = ? AND user_uuid = ? AND profile = ?'
+      : 'DELETE FROM jellyfin_playlists WHERE id = $1 AND user_uuid = $2 AND profile = $3';
+    const result = await this.runQuery(query, [id, userUUID, profile]);
+    return (Number(this.type === 'sqlite' ? result?.changes : result?.rowCount) || 0) > 0;
   }
 
   // listed=0 is a removal kept until the trackers stop listing the title.
