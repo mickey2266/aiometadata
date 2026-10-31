@@ -24,6 +24,15 @@ export function syncsStremioLibrary(config: any): boolean {
   return scrobblesStremio(config) && config?.stremioLibraryWatchlist === true;
 }
 
+/** Event resources the manifest declares; declaring one is what makes a front-end start delivering it. */
+export function scrobbleResources(config: any, anyoneTracks: boolean): string[] {
+  if (!anyoneTracks) return [];
+  return [
+    ...(scrobblesJellyfin(config) ? ['watch_state', 'playback'] : []),
+    ...(scrobblesStremio(config) ? ['player', 'library'] : []),
+  ];
+}
+
 export const WATCH_TRACKING_SERVICES: WatchTrackingService[] = [
   'simkl',
   'anilist',

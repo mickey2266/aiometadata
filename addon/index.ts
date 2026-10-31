@@ -4897,7 +4897,10 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
                 res.setHeader('Access-Control-Allow-Headers', '*');
                 return res.status(500).send({ err: "Failed to build manifest." });
             }
-            
+        if (manifest.resources?.includes('player')) {
+            require('./lib/stremioEventStatus').noteManifest(userUUID, profile?.id ?? '');
+        }
+
         // Pass config to request object for ETag generation
         req.userConfig = config;
         
@@ -5972,6 +5975,52 @@ addon.get("/stremio/:userUUID/watch_state/pull.json", async function (req, res) 
     return res.status(500).json({ error: "Failed to read watch state" });
   }
 });
+
+// --- Stremio player and library events ---
+// Stremio does not wait for or read the answer, so it is given before the work.
+function stremioEventRoute(resource) {
+  return async function (req, res) {
+    const { userUUID, type, id, extra } = req.params;
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Cache-Control', 'no-store');
+
+    let config;
+    try {
+      config = await loadConfigFromDatabase(userUUID);
+    } catch {
+      config = null;
+    }
+    if (!config) return res.json({ success: false });
+
+    const { configForViewer, profileForViewer } = require('./lib/jellyfin/profiles');
+    const { scrobblesStremio, syncsStremioLibrary } = require('./lib/watchTracking');
+    const { parseStremioEvent, stremioEventTarget, stremioEventKey, isRepeatEvent } = require('./lib/stremioEvents');
+    const viewer = configForViewer(config, userUUID, req.query.viewer);
+    if (!viewer) return refuseUnknownViewer(res, 'Stremio', userUUID, req.query.viewer);
+    const event = scrobblesStremio(viewer) ? parseStremioEvent(resource, type, id, extra) : null;
+    if (!event) return res.json({ success: false });
+    res.json({ success: true });
+
+    require('./lib/stremioEventStatus').noteEvent(userUUID, profileForViewer(config, userUUID, req.query.viewer)?.id ?? '');
+    const { viewerScope } = require('./lib/playbackHandler');
+    if (isRepeatEvent(viewerScope(userUUID, viewer), stremioEventTarget(event), stremioEventKey(event))) return;
+
+    const { runAsAccountOwner } = require('./lib/jellyfin/viewer');
+    const { accountOwner } = require('./lib/accounts');
+    runAsAccountOwner(accountOwner(viewer), async () => {
+      const playstate = require('./lib/jellyfin/playstate');
+      if (event.resource === 'player') return playstate.recordStremioPlay(userUUID, viewer, event);
+      if (event.action === 'watched' || event.action === 'unwatched') return playstate.recordStremioMark(userUUID, viewer, event);
+      if (!syncsStremioLibrary(viewer)) return;
+      const { setWatchlisted } = require('./lib/jellyfin/watchlist');
+      const t = /^(kitsu|mal|anilist|anidb):/.test(event.metaId) ? 'anime' : event.type;
+      await setWatchlisted(userUUID, viewer, { k: event.type, t, i: event.metaId }, event.action === 'libraryAdd');
+    }).catch((error) => consola.error(`[Stremio] ${resource} ${type}/${id} failed: ${error.message}`));
+  };
+}
+addon.get("/stremio/:userUUID/player/:type/:id/:extra.json", stremioEventRoute('player'));
+addon.get("/stremio/:userUUID/library/:type/:id/:extra.json", stremioEventRoute('library'));
 
 // When each install link last fetched a manifest declaring the Stremio events, and last sent one.
 addon.post("/api/stremio/:userUUID/event-status", configLoadRateLimitMiddleware, async function (req, res) {
