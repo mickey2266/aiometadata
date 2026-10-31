@@ -1262,7 +1262,7 @@ async function droppedShows(userUUID: string, profile: string, ids: string[], co
 // An id no profile has any more scopes to the main one, so it is refused rather than acted on as that profile.
 const scopedTo = (config: any, profile: string | null): boolean => !profile || config?.jellyfinProfileId === profile;
 
-function asProfile<T>(userUUID: string, profile: string | null, work: (config: any) => Promise<T>): Promise<T | null> {
+export function asProfile<T>(userUUID: string, profile: string | null, work: (config: any) => Promise<T>): Promise<T | null> {
   const { runInViewerScope } = require('./viewer');
   const { loadConfig } = require('./context');
   return runInViewerScope(false, async () => {
@@ -1772,6 +1772,8 @@ export async function dashboardTitle(userUUID: string, profile: string | null, r
       poster: image(season.Id, 'Primary', season.ImageTags?.Primary),
       count: Number(season.ChildCount) || 0,
     }));
+    const rated = { ...item };
+    await require('./criticRatings').withCriticRatings(rated, true)?.catch(() => undefined);
     return {
       id: String(item.Id),
       metaId: String(meta.id),
@@ -1781,6 +1783,10 @@ export async function dashboardTitle(userUUID: string, profile: string | null, r
       year: meta.releaseInfo ? String(meta.releaseInfo) : meta.year ? String(meta.year) : null,
       overview: meta.description ?? null,
       genres: Array.isArray(meta.genres) ? meta.genres.map(String) : [],
+      certification: item.OfficialRating ? String(item.OfficialRating) : null,
+      studios: (Array.isArray(item.Studios) ? item.Studios : []).map((studio: any) => String(studio?.Name ?? '')).filter(Boolean),
+      tags: (Array.isArray(item.Tags) ? item.Tags : []).map(String),
+      ratings: Array.isArray(rated.aiostreams?.ratings) ? rated.aiostreams.ratings : [],
       score: Number.isFinite(Number.parseFloat(meta.imdbRating)) ? String(meta.imdbRating) : null,
       runtime: meta.runtime ? String(meta.runtime) : null,
       releasedAt: meta.released ? Date.parse(String(meta.released)) || null : null,

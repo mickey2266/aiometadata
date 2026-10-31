@@ -15,6 +15,7 @@ import { viewerAccountOwner, viewerMarksUnaired, viewerProfile, viewerReadsExten
 import { SERVER_WATCHLIST_PREFIX } from '../serverWatchlist';
 import { isLandscapeCatalogConfig } from '../../utils/catalogPosterShape';
 import { configCatalogFor } from '../collectionBuilder/homeOrder';
+import { shuffleMetas } from '../../utils/mergedCatalog';
 
 const logger = consola.withTag('Jellyfin');
 
@@ -261,6 +262,7 @@ export async function fetchCatalogPage(
     if (typeof body?.rawLength === 'number') rawLengths.set(metas, body.rawLength);
     if (typeof body?.pageSize === 'number' && body.pageSize > 0) pageSizes.set(metas, body.pageSize);
     if (body?.served === true) servedPages.add(metas);
+    if (body?.randomize === true) randomizedPages.add(metas);
     return metas;
   } catch (error: any) {
     failedPages.set(memo, true);
@@ -272,6 +274,7 @@ export async function fetchCatalogPage(
 const rawLengths = new WeakMap<any[], number>();
 const pageSizes = new WeakMap<any[], number>();
 const servedPages = new WeakSet<any[]>();
+const randomizedPages = new WeakSet<any[]>();
 const servedCatalogs = new LRUCache<string, true>({
   max: envInt('JELLYFIN_PAGE_LENGTH_CACHE_MAX', 2000, 1),
   ttl: envInt('JELLYFIN_CATALOG_LENGTH_TTL', 3600, 60) * 1000,
@@ -291,6 +294,11 @@ export interface Window {
   items: any[];
   hasMore: boolean;
   failed?: boolean;
+  randomize?: boolean;
+}
+
+export function servedOrder(items: any[], window: Partial<Window>): any[] {
+  return window.randomize ? shuffleMetas(items) : items;
 }
 
 /**
@@ -443,6 +451,7 @@ export async function fetchWindow(
   let pages = 0;
   let exhausted = false;
   let failed = false;
+  let randomize = false;
   let budget = maxPages((offset + limit) * (filtering ? 2 : 1), pageLength || 0);
 
   // A length counts what a client was shown, which runs behind the catalog's own
@@ -479,6 +488,7 @@ export async function fetchWindow(
         stop = true;
         break;
       }
+      if (randomizedPages.has(page)) randomize = true;
       if (servedPages.has(page) && !sequential) {
         sequential = true;
         servedCatalogs.set(pageKey, true);
@@ -554,6 +564,7 @@ export async function fetchWindow(
     // A walk cut short by its page budget has more behind it, even if the window is short.
     hasMore: collected.length > offset + limit || (!exhausted && !failed),
     ...(failed ? { failed: true } : {}),
+    ...(randomize ? { randomize: true } : {}),
   };
 }
 
@@ -621,12 +632,16 @@ function endDate(meta: any): string | null {
   return end ? new Date(Date.UTC(Number(end), 11, 31)).toISOString() : null;
 }
 
+export function personIdOf(member: { name?: unknown; tmdbId?: unknown; tvdbId?: unknown } | null | undefined): string {
+  const source = Number(member?.tvdbId) > 0 ? { s: 'tvdb' as const, x: Number(member!.tvdbId) }
+    : Number(member?.tmdbId) > 0 ? { s: 'tmdb' as const, x: Number(member!.tmdbId) } : {};
+  return encodeJellyfinId({ k: 'person', n: String(member?.name || ''), ...source });
+}
+
 function peopleFrom(meta: any, serverId: string): any[] {
   const extras = meta.app_extras || {};
   const person = (member: any, type: string, role: string) => {
-    const source = Number(member?.tvdbId) > 0 ? { s: 'tvdb' as const, x: Number(member.tvdbId) }
-      : Number(member?.tmdbId) > 0 ? { s: 'tmdb' as const, x: Number(member.tmdbId) } : {};
-    const id = encodeJellyfinId({ k: 'person', n: String(member?.name || ''), ...source });
+    const id = personIdOf(member);
     // A client only asks for a portrait when the tag is present, so registering
     // the photo and setting it have to happen together.
     if (member?.photo) rememberImages(serverId, id, { primary: member.photo });
