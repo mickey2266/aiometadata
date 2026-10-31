@@ -54,9 +54,13 @@ const spellingRank = (id: string): number => {
   return at < 0 ? SPELLING_ORDER.length : at;
 };
 
+// A film and a show can carry one TMDB number; the show's key then says so, and lookups take the mark off.
+const SHOW_MARK = 'series|';
+export const metaIdOf = (key: string): string => (key.startsWith(SHOW_MARK) ? key.slice(SHOW_MARK.length) : key);
+
 const preferred = (ids: string[]): string => [...ids].sort((a, b) => spellingRank(a) - spellingRank(b) || a.localeCompare(b))[0];
 
-function unionFind(ids: string[]) {
+export function unionFind(ids: string[]) {
   const parent = new Map<string, string>(ids.map((id) => [id, id]));
   const find = (id: string): string => {
     let root = id;
@@ -94,37 +98,20 @@ function viewingsOf(times: Array<{ at: number; origin: string | null }>): Array<
   return out;
 }
 
-const spellingKind = (id: string): string => (id.startsWith('tt') ? 'tt' : id.split(':')[0]);
-
-function pairFilmSpellings(rows: Array<{ video_id: string; watched_at: number }>, union: (a: string, b: string) => void): void {
-  const batchSize = envInt('JELLYFIN_YEAR_REVIEW_BATCH_PLAYS', 6, 2);
-  const byInstant = new Map<number, Set<string>>();
-  for (const row of rows) byInstant.set(row.watched_at, (byInstant.get(row.watched_at) ?? new Set()).add(row.video_id));
-  for (const ids of byInstant.values()) {
-    if (ids.size >= batchSize) continue;
-    const films = [...ids].filter((id) => {
-      const parsed = parseStremioId(id);
-      return parsed && (parsed.episode === null || parsed.episode === undefined);
-    });
-    if (films.length < 2 || films.length !== ids.size) continue;
-    if (new Set(films.map(spellingKind)).size !== films.length) continue;
-    for (const id of films.slice(1)) union(films[0], id);
-  }
-}
-
 export async function foldPlays(rows: Array<{ video_id: string; watched_at: number; origin: string | null }>): Promise<YearPlay[]> {
   const ids = [...new Set(rows.map((row) => row.video_id))];
   const spellings = unionFind(ids);
   const aliases = await mapWithConcurrency(ids, envInt('JELLYFIN_YEAR_REVIEW_ALIAS_CONCURRENCY', 8, 1), (id) => videoIdAliases(id).catch(() => [] as string[]));
+  // Spellings join only by alias: an import dates every title of a day at one moment, so the moment links nothing.
   ids.forEach((id, i) => {
     for (const alias of aliases[i]) spellings.union(id, alias);
   });
-  pairFilmSpellings(rows, spellings.union);
 
   const bases = new Map<string, string>();
   for (const id of ids) {
     const parsed = parseStremioId(id);
-    bases.set(id, parsed?.base ? String(parsed.base) : id);
+    const kind = parsed && parsed.episode !== null && parsed.episode !== undefined ? 'series' : 'movie';
+    bases.set(id, `${kind}|${parsed?.base ? String(parsed.base) : id}`);
   }
   const titles = unionFind([...new Set(bases.values())]);
   const groups = spellings.groups();
@@ -132,10 +119,11 @@ export async function foldPlays(rows: Array<{ video_id: string; watched_at: numb
     const groupBases = group.map((id) => bases.get(id)!);
     for (const base of groupBases.slice(1)) titles.union(groupBases[0], base);
   }
+  const named = titles.groups().map((members) => ({ members, kind: members[0].split('|')[0], key: preferred(members.map((member) => member.slice(member.indexOf('|') + 1))) }));
+  const films = new Set(named.filter((title) => title.kind === 'movie').map((title) => title.key));
   const titleKeys = new Map<string, string>();
-  for (const members of titles.groups()) {
-    const key = preferred(members);
-    for (const member of members) titleKeys.set(member, key);
+  for (const { members, kind, key } of named) {
+    for (const member of members) titleKeys.set(member, kind === 'series' && films.has(key) ? `${SHOW_MARK}${key}` : key);
   }
 
   const timesById = new Map<string, Array<{ at: number; origin: string | null }>>();

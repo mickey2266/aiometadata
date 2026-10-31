@@ -1,6 +1,8 @@
+import { LRUCache } from 'lru-cache';
 import { mapWithConcurrency } from '../../../utils/concurrency';
 import { personIdOf } from '../items';
 import type { AnimeYear } from './anime';
+import { metaIdOf } from './plays';
 import type { FactsPerson } from './facts';
 import type { YearTitle } from './timed';
 
@@ -49,8 +51,9 @@ export interface PeopleYear {
   networks: Array<{ name: string; logo: string | null; plays: number }>;
 }
 
-const personKey = (name: string): string => name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-const nameOf = (title: YearTitle): string => (title.facts?.name ?? title.key).replace(/\s+\(\d{4}\)$/, '');
+// Accents are folded off Latin names; any other script is kept, so a name in Hangul or kanji still has a key.
+const personKey = (name: string): string => name.normalize('NFD').replace(/[̀-ͯ]/g, '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+const nameOf = (title: YearTitle): string => (title.facts?.name ?? metaIdOf(title.key)).replace(/\s+\(\d{4}\)$/, '');
 const refOf = (title: YearTitle): TitleRef => ({ name: nameOf(title), key: title.key, kind: title.kind, poster: title.facts?.poster ?? null });
 
 interface Credit {
@@ -134,7 +137,22 @@ async function networksOf(config: any, shows: YearTitle[]): Promise<PeopleYear['
   return mapWithConcurrency(top, 2, async ([name, count]) => ({ name, logo: await networkLogo(config, name), plays: count }));
 }
 
-export async function networkLogo(config: any, name: string): Promise<string | null> {
+// The top show's network is asked for by the review and again by its networks, so one lookup serves both.
+const logos = new LRUCache<string, Promise<string | null>>({ max: 500, ttl: 24 * 60 * 60 * 1000 });
+
+export function networkLogo(config: any, name: string): Promise<string | null> {
+  const held = logos.get(name);
+  if (held) return held;
+  const found = readNetworkLogo(config, name);
+  logos.set(name, found);
+  // A failed lookup reads as no logo, so it is not kept.
+  void found.then((logo) => {
+    if (logo === null) logos.delete(name);
+  });
+  return found;
+}
+
+async function readNetworkLogo(config: any, name: string): Promise<string | null> {
   try {
     const { resolveTmdbNetworkByName } = require('../../tmdb-network-index');
     const found = await resolveTmdbNetworkByName(name);

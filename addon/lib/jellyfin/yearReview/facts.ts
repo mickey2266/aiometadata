@@ -1,7 +1,7 @@
 import { envInt } from '../../../utils/envNumber';
 import { mapWithConcurrency } from '../../../utils/concurrency';
 import { fetchMetaBeforeArt, originalLanguage, parseRuntimeTicks } from '../items';
-import type { YearPlay } from './plays';
+import { metaIdOf, type YearPlay } from './plays';
 
 const database: any = require('../../database');
 
@@ -177,16 +177,16 @@ export async function metaContextDigest(userUUID: string): Promise<string> {
 
 function factsKey(config: any, request: FactsRequest): string {
   const { getMetaSmartLockContextHash } = require('../../getCache');
-  return `v${FACTS_VERSION}:${request.kind}:${getMetaSmartLockContextHash(config, request.titleKey, request.kind, true, false)}:${request.titleKey}`;
+  return `v${FACTS_VERSION}:${request.kind}:${getMetaSmartLockContextHash(config, metaIdOf(request.titleKey), request.kind, true, false)}:${metaIdOf(request.titleKey)}`;
 }
 
-export async function titleFacts(userUUID: string, requests: FactsRequest[]): Promise<{ facts: Map<string, TitleFacts>; stored: number; built: number; held: number; missing: number }> {
+export async function titleFacts(userUUID: string, requests: FactsRequest[]): Promise<{ facts: Map<string, TitleFacts>; stored: number; built: number; held: number; missing: number; unbuilt: number }> {
   const buildBudget = envInt('JELLYFIN_YEAR_REVIEW_BUILD_TITLES', 400, 0);
   const width = envInt('JELLYFIN_YEAR_REVIEW_META_CONCURRENCY', 4, 1);
   const maxAgeMs = envInt('JELLYFIN_YEAR_REVIEW_FACTS_HOURS', 7 * 24, 1) * 60 * 60 * 1000;
   const facts = new Map<string, TitleFacts>();
   const config = await routeConfig(userUUID);
-  if (!config) return { facts, stored: 0, built: 0, held: 0, missing: requests.length };
+  if (!config) return { facts, stored: 0, built: 0, held: 0, missing: requests.length, unbuilt: requests.length };
   const keys = new Map(requests.map((request) => [request.titleKey, factsKey(config, request)]));
   const kept: Map<string, any> = await database.getTitleFacts([...keys.values()], Date.now() - maxAgeMs).catch(() => new Map());
   for (const request of requests) {
@@ -198,9 +198,21 @@ export async function titleFacts(userUUID: string, requests: FactsRequest[]): Pr
   const fresh: Array<{ key: string; data: TitleFacts }> = [];
   let built = 0;
   let held = 0;
-  await mapWithConcurrency(ranked, width, async (request, rank) => {
-    const cached = await heldMeta(userUUID, config, request.kind, request.titleKey);
-    const meta = cached ?? (rank < buildBudget ? await fetchMetaBeforeArt(userUUID, request.kind, request.titleKey).catch(() => null) : null);
+  // Only titles fetched here spend the budget; one already in the meta cache costs nothing.
+  let started = 0;
+  // Titles left for the budget or lost to a failed fetch are worth another build; one with no metadata is not.
+  let unbuilt = 0;
+  await mapWithConcurrency(ranked, width, async (request) => {
+    const cached = await heldMeta(userUUID, config, request.kind, metaIdOf(request.titleKey));
+    let meta = cached;
+    if (!meta && started >= buildBudget) unbuilt += 1;
+    else if (!meta) {
+      started += 1;
+      meta = await fetchMetaBeforeArt(userUUID, request.kind, metaIdOf(request.titleKey)).catch(() => {
+        unbuilt += 1;
+        return null;
+      });
+    }
     if (!meta) return;
     if (cached) held += 1;
     else built += 1;
@@ -209,7 +221,7 @@ export async function titleFacts(userUUID: string, requests: FactsRequest[]): Pr
     fresh.push({ key: keys.get(request.titleKey)!, data: found });
   });
   if (fresh.length) await database.putTitleFacts(fresh).catch(() => undefined);
-  return { facts, stored, built, held, missing: requests.length - facts.size };
+  return { facts, stored, built, held, missing: requests.length - facts.size, unbuilt };
 }
 
 export function factsRequests(plays: YearPlay[]): FactsRequest[] {
