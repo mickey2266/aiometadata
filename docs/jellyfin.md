@@ -132,8 +132,10 @@ The table records every play and every watched mark whatever **When to record** 
 A tracker records a play only when all three hold:
 
 1. the service is connected under **Integrations**;
-2. its switch under **Watch Tracking** in **General** is on, the media type is one the service's options include, and **When to record** in the same section is set to **When playback starts and stops**;
+2. its switch under **Watch Tracking** in **General** is on, the media type is one the service's options include, and **When to record** in the same section is set to **When playback starts and stops**, with **Jellyfin** on;
 3. the play went through a server that reports playback: this addon's Jellyfin server, or AIOStreams' with the handoff described further down.
+
+Plays from Stremio are recorded in this table too, under their own switch; see [Stremio](#stremio).
 
 A title played in any other client, or on a Jellyfin server that was not signed in to through this addon, records nothing here, whatever the trackers show for it.
 
@@ -214,12 +216,12 @@ The watchlist is the client's favourites. Marking a title favourite adds it to t
 
 ## AIOMetadata inside AIOStreams' Jellyfin server
 
-AIOStreams has a Jellyfin server of its own. In that setup the client signs in to AIOStreams, not to this addon, and AIOMetadata is one of the addons installed in it, supplying the catalogs and title pages. Nothing in this guide's sign-in, users or shelves sections applies then; AIOStreams builds those. What AIOMetadata still does is the tracking, through two resources it declares in its manifest once **Playback reporting** under **General** is set to **When playback starts and stops**:
+AIOStreams has a Jellyfin server of its own. In that setup the client signs in to AIOStreams, not to this addon, and AIOMetadata is one of the addons installed in it, supplying the catalogs and title pages. Nothing in this guide's sign-in, users or shelves sections applies then; AIOStreams builds those. What AIOMetadata still does is the tracking, through two resources it declares in its manifest once **When to record** under **General** is set to **When playback starts and stops**, with **Jellyfin** on:
 
 - **playback.** AIOStreams sends the plays its clients report as start, stop, mark-played and mark-unplayed events, with the title known under every id it holds, so a show keyed on MyAnimeList with episodes keyed on Kitsu is still recorded once. A stop past the trackers' 80 percent counts as a watch; an earlier one is a resume point. Each event is reported to every tracker with watch tracking on, the same way a play through this addon's own server is. A repeated event within `PLAYBACK_MARK_REPEAT_WINDOW` is an echo and dropped.
 - **watch_state.** AIOStreams reads back what the trackers and this addon hold, so its Continue Watching reflects other devices. The answer is the same merged view this addon's own resume shelf uses, following the **Trackers** pick, newest first, `WATCH_STATE_PULL_ITEMS` titles at a time, and may be reused for `WATCH_STATE_PULL_TTL` seconds before AIOStreams asks again.
 
-**Several people on AIOStreams' server.** Once the configuration has a user card, or a name under **Also known as (AIOStreams)** on your own card, the manifest tells AIOStreams it may name the viewer (`watchState.viewers`). An event carrying a `viewer`, or a read asking `?viewer=`, is matched to a user here by name, case aside: your own user's name, a user card's name, or one of the names listed under **Also known as (AIOStreams)** on a card. A matched user's plays, marks, drops and hearts go to their own accounts, and the read answers from their accounts and picks, as on this addon's own server. The handoff keeps no positions of its own, so the plays of a user without accounts are accepted and recorded nowhere; AIOStreams keeps their Continue Watching. An event without a viewer is yours, as before, and so is every event while the configuration has no user cards or AIOStreams names. Otherwise an event naming nobody here is refused and recorded nowhere, so a family member without a card never lands on your trackers; the log shows the name. Anyone holding the install URL can act as any user through these two resources and the catalog reads below, the same trust the URL already carried for yours.
+**Several people on AIOStreams' server.** Once the configuration has a user card, or a name under **Also known as (AIOStreams and other apps)** on your own card, the manifest tells AIOStreams it may name the viewer (`watchState.viewers`). An event carrying a `viewer`, or a read asking `?viewer=`, is matched to a user here by name, case aside: your own user's name, a user card's name, or one of the names listed under **Also known as (AIOStreams and other apps)** on a card. A matched user's plays, marks, drops and hearts go to their own accounts, and the read answers from their accounts and picks, as on this addon's own server. The handoff keeps no positions of its own, so the plays of a user without accounts are accepted and recorded nowhere; AIOStreams keeps their Continue Watching. An event without a viewer is yours, as before, and so is every event while the configuration has no user cards or AIOStreams names. Otherwise an event naming nobody here is refused and recorded nowhere, so a family member without a card never lands on your trackers; the log shows the name. Anyone holding the install URL can act as any user through these two resources and the catalog reads below, the same trust the URL already carried for yours.
 
 **Catalog rows can follow the user too.** A catalog read asking `?viewer=` is matched the same way and answered as that user: the **Recommendations** rows from their own history and picks, and the catalogs that mean "this account's own list" from their accounts, as on this addon's own server. AIOStreams forwards the query of an addon's URL to every read, so the address only has to name the user. Keep one install of this addon and, in the variant each user picks in AIOStreams, point it at their name:
 
@@ -229,9 +231,21 @@ set presets[instanceId=<this addon's instance id>].options.manifestUrl = "https:
 
 The catalogs keep their arrangement, since the addon is still the same instance. Adding a second copy of the addon for a user instead shows them both their rows and yours. A read without a viewer is yours, as before, and one naming nobody here is refused; the manifest logs the name it did not know.
 
-AIOStreams sends and reads these only with its `WATCH_STATE_HANDOFF_ENABLED` switched on. With **Playback reporting** left on **When a title is opened**, neither resource is declared and AIOStreams records nothing through this addon; opening a title is then the only signal, as for any other client.
+AIOStreams sends and reads these only with its `WATCH_STATE_HANDOFF_ENABLED` switched on. With **When to record** left on **When a title is opened**, or **Jellyfin** switched off, neither resource is declared and AIOStreams records nothing through this addon; opening a title is then the only signal, as for any other client.
 
 Running both servers at once is fine: a client on this addon's server plays through AIOStreams as a plain stream addon, which is not a session AIOStreams reports, so a play is recorded once, by whichever server the client signed in to.
+
+## Stremio
+
+Stremio sends add-ons the plays, pauses and stops of its player, and the watched marks and library changes you make. With **When to record** set to **When playback starts and stops** and **Stremio SDK** switched on, the manifest declares the `player` and `library` resources and AIOMetadata records them the way it records a play on its own Jellyfin server: in the user's play-state table first, so Continue Watching, the ticks and Next Up here show it at once, and then on every tracker with watch tracking on.
+
+- **Reinstall once.** Stremio keeps the manifest it installed and does not refresh it for third-party add-ons, so it sends nothing until the addon is reinstalled after the switch is turned on. Saving raises the reinstall prompt, and the switch shows **Reinstall required** until a manifest declaring the events has been fetched, then **No playback from Stremio yet** until the first event arrives.
+- **Watched.** A stop at or past the user's watched point (`JELLYFIN_PLAYED_THRESHOLD`, 80 unless changed for the user) counts as a watch; an earlier one keeps the position as a resume point. Stremio ticks a title at 70 percent itself, so a stop between the two shows watched in Stremio and as a resume point on the trackers. A season or a whole series marked in Stremio is recorded as one mark.
+- **Library.** With **Sync Stremio library with watchlists** on, adding a title to the Stremio library adds it to the user's watchlist here and on their trackers, and removing it removes it. Titles Stremio keeps only because they were played are not part of this.
+- **Several people.** Each Stremio profile picks its own add-ons, so each installs its own link. Your own profile uses the plain install link; for a user card, use **Install in Stremio** on the card, which adds `?viewer=` with the card's id. That profile's plays then go to that user's table and accounts, and its catalogs follow the user, as on this addon's own server. A link naming a card that no longer exists is refused, so its plays never land on yours.
+- **Repeats.** Two installs of the same configuration in one profile both receive every event; a repeat of the last event for the same title within `STREMIO_EVENT_DEDUPE_SECONDS` (60) is dropped.
+
+**When a title is opened** stays available for clients that report neither way: they ask the addon for subtitles when a title opens, and that request is recorded as a watch.
 
 ## Artwork and appearance
 
@@ -327,7 +341,7 @@ Clients differ in what they ask for, and a few things are worth knowing when a r
 
 **A play was not recorded on one tracker.** Check the three conditions under [What the server records](#what-the-server-records): the service must be connected, its switch under **Watch Tracking** in **General** must be on for that media type, and the play must have gone through this server or AIOStreams' handoff. A tracker that was connected after the play, or whose switch is off, has no way to hear about it; the log filtered by the configuration id shows each event as it arrives and any tracker that refused it. A user that is not you writes only to accounts connected on their own card.
 
-**AIOStreams plays are refused with "Unknown viewer".** AIOStreams named a user this configuration does not have. Add a user with that name, or add the name under **Also known as (AIOStreams)** on the right card, and save.
+**AIOStreams plays are refused with "Unknown viewer".** AIOStreams named a user this configuration does not have. Add a user with that name, or add the name under **Also known as (AIOStreams and other apps)** on the right card, and save.
 
 **A user's plays stopped reaching their tracker.** Their token was revoked or expired on the tracker's side; the log filtered by the configuration id names the user and the status. Disconnect and connect the account again on their card.
 

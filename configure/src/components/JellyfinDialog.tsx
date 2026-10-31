@@ -25,6 +25,8 @@ import { MAX_TAG_NAME_LENGTH, type CatalogConfig, type JellyfinUser, type SkipPr
 import { UserAccounts } from "@/components/jellyfin/UserAccounts";
 import { CARD_SERVICES, connectedServices, handoffNameClash, isHolder, trackerOptionsFor, watchlistOptionsFor } from "@/lib/cardAccounts";
 import { disconnectCardAccount } from "@/lib/integrationCredentials";
+import { scrobblesStremio, stremioLinkState, withViewer, type StremioLinkState } from "@/lib/watchTracking";
+import { useStremioLinkStatus } from "@/hooks/useStremioLinkStatus";
 
 /**
  * Typed by hand on a TV remote as often as pasted, so the alphabet leaves out
@@ -83,15 +85,33 @@ function HandoffNamesInput({ names, onChange }: { names?: string[]; onChange: (n
   };
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Label className="text-xs text-muted-foreground">Also known as (AIOStreams)</Label>
+      <Label className="text-xs text-muted-foreground">Also known as (AIOStreams and other apps)</Label>
       <Input
         className="h-8 min-w-[12rem] flex-1 text-xs"
-        placeholder="Names this user has on AIOStreams' Jellyfin server, comma separated"
+        placeholder="Names this user has in other apps, comma separated"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
       />
+    </div>
+  );
+}
+
+function StremioInstallRow({ name, url, state, onInstall }: { name: string; url: string; state: StremioLinkState | null; onInstall: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Label className="text-xs text-muted-foreground">Stremio</Label>
+      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onInstall}>Install in Stremio</Button>
+      <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => { void copyToClipboard(url, `${name}'s install link`); }}>
+        <Copy className="h-3 w-3" />
+        Copy link
+      </Button>
+      {state === 'reinstall' ? (
+        <span className="text-xs text-amber-400">Reinstall required</span>
+      ) : state === 'waiting' ? (
+        <span className="text-xs text-muted-foreground">No playback from Stremio yet</span>
+      ) : null}
     </div>
   );
 }
@@ -154,6 +174,7 @@ interface UserRowProps {
   /** The main user's choice, which a user left on "Same as you" follows. */
   mainSkipSource: SkipSource;
   showHandoff?: boolean;
+  stremioInstall?: { url: string; state: StremioLinkState | null; onInstall: () => void };
   watchedPoint?: WatchedPoint;
   onChange: (patch: Partial<JellyfinUser>) => void;
   onRemove?: () => void;
@@ -228,7 +249,7 @@ function WatchedPointPicker({ name, point }: { name: string; point: WatchedPoint
   );
 }
 
-function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptions, watchlistOptions, hasPmdb, mainSkipSource, showHandoff, watchedPoint, onChange, onRemove, onForget, children }: UserRowProps) {
+function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptions, watchlistOptions, hasPmdb, mainSkipSource, showHandoff, stremioInstall, watchedPoint, onChange, onRemove, onForget, children }: UserRowProps) {
   const chosen = user?.tags ?? [];
   const toggleTag = (tag: string) =>
     onChange({ tags: chosen.includes(tag) ? chosen.filter((t) => t !== tag) : [...chosen, tag] });
@@ -382,6 +403,7 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
         {watchedPoint ? <WatchedPointPicker name={name} point={watchedPoint} /> : null}
       </div>
       {showHandoff ? <HandoffNamesInput names={user?.handoffNames} onChange={(handoffNames) => onChange({ handoffNames })} /> : null}
+      {stremioInstall ? <StremioInstallRow name={name} {...stremioInstall} /> : null}
       {children}
     </div>
   );
@@ -538,7 +560,9 @@ interface JellyfinDialogProps {
 
 export function JellyfinDialog({ open, onOpenChange, userUUID }: JellyfinDialogProps) {
   const { config, setConfig, auth } = useConfig();
-  const { requestSave, isSaving, isDirty, canSave } = useSave();
+  const { requestSave, isSaving, isDirty, canSave, openInstall } = useSave();
+  const stremioOn = scrobblesStremio(config);
+  const stremioStatus = useStremioLinkStatus(open && stremioOn);
   const [resolveMode, setResolveMode] = useState<string>('user');
   const [upcomingMode, setUpcomingMode] = useState<string>('user');
   const [baseUrl, setBaseUrl] = useState<string>(window.location.origin);
@@ -657,6 +681,16 @@ export function JellyfinDialog({ open, onOpenChange, userUUID }: JellyfinDialogP
   const addCatalogs = (entries: CatalogConfig[]) =>
     setConfig(prev => ({ ...prev, catalogs: [...prev.catalogs, ...entries.filter((e) => !prev.catalogs.some((c) => c.id === e.id && c.type === e.type))] }));
   const nameClash = handoffNameClash(mainName, config.jellyfinUserHandoffNames, users);
+  const showHandoff = users.length > 0 || Boolean(config.jellyfinUserHandoffNames?.length);
+  const stremioInstallFor = (cardId: string): UserRowProps['stremioInstall'] => {
+    if (!stremioOn || !auth.installUrl) return undefined;
+    const url = cardId ? withViewer(auth.installUrl, cardId) : auth.installUrl;
+    return {
+      url,
+      state: stremioStatus ? stremioLinkState(config.stremioScrobblingSince, stremioStatus[cardId]) : null,
+      onInstall: () => openInstall(url),
+    };
+  };
   const badPin = pinInvalid(config.jellyfinUserPin) || users.some((user) => pinInvalid(user.pin));
   const addUser = () => {
     const clean = newUserName.trim();
@@ -1027,7 +1061,8 @@ export function JellyfinDialog({ open, onOpenChange, userUUID }: JellyfinDialogP
               watchlistOptions={watchlistOptions}
               hasPmdb={Boolean(config.apiKeys?.publicmetadb)}
               mainSkipSource={config.jellyfinSkipSource ?? 'auto'}
-              showHandoff={config.playbackReporting === true}
+              showHandoff={showHandoff}
+              stremioInstall={stremioInstallFor('')}
               watchedPoint={watchedPointFor('', mainName)}
               onForget={() => setForgetFor({ profile: null, name: mainName })}
               onChange={(patch) => setConfig(prev => ({
@@ -1056,7 +1091,8 @@ export function JellyfinDialog({ open, onOpenChange, userUUID }: JellyfinDialogP
                   watchlistOptions={holder ? watchlistOptionsFor(user) : watchlistOptions}
                   hasPmdb={Boolean(config.apiKeys?.publicmetadb)}
                   mainSkipSource={config.jellyfinSkipSource ?? 'auto'}
-                  showHandoff={config.playbackReporting === true}
+                  showHandoff={showHandoff}
+                  stremioInstall={stremioInstallFor(user.id)}
                   watchedPoint={watchedPointFor(user.id, user.name)}
                   onChange={(patch) => updateUser(user.id, patch)}
                   onRemove={() => { void removeUser(user); }}
@@ -1068,7 +1104,7 @@ export function JellyfinDialog({ open, onOpenChange, userUUID }: JellyfinDialogP
                 </UserRow>
               );
             })}
-            {nameClash ? <p className="text-xs text-destructive">"{nameClash}" is used by two users. Each name, including AIOStreams names, must belong to one user.</p> : null}
+            {nameClash ? <p className="text-xs text-destructive">"{nameClash}" is used by two users. Each name, including Also known as names and user ids, must belong to one user.</p> : null}
             <div className="flex items-center gap-2">
               <Input
                 value={newUserName}
