@@ -71,6 +71,23 @@ export function isRepeatEvent(scope: string, target: string, key: string): boole
   return repeat;
 }
 
+/** The title an event is about, so a play and a mark of one show queue behind each other. */
+export function stremioEventSlot(event: StremioEvent): string {
+  const id = event.resource === 'player' ? event.videoId : event.metaId;
+  return parseStremioId(id)?.base ?? id;
+}
+
+// Stremio sends without waiting, so events of one title are worked through in arrival order.
+const queues = new Map<string, Promise<void>>();
+
+export function runInOrder(slot: string, work: () => Promise<unknown>): Promise<void> {
+  const next = (queues.get(slot) ?? Promise.resolve()).then(() => work()).then(() => undefined);
+  const settled = next.catch(() => undefined);
+  queues.set(slot, settled);
+  settled.then(() => { if (queues.get(slot) === settled) queues.delete(slot); });
+  return next;
+}
+
 export function descriptorForVideo(type: 'movie' | 'series', videoId: string): Descriptor | null {
   const t = ANIME_ID.test(videoId) ? 'anime' : type;
   if (type === 'movie') return { k: 'movie', t, i: videoId };

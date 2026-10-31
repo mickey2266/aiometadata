@@ -5995,7 +5995,7 @@ function stremioEventRoute(resource) {
 
     const { configForViewer, profileForViewer } = require('./lib/jellyfin/profiles');
     const { scrobblesStremio, syncsStremioLibrary } = require('./lib/watchTracking');
-    const { parseStremioEvent, stremioEventTarget, stremioEventKey, isRepeatEvent } = require('./lib/stremioEvents');
+    const { parseStremioEvent, stremioEventTarget, stremioEventKey, stremioEventSlot, isRepeatEvent, runInOrder } = require('./lib/stremioEvents');
     const viewer = configForViewer(config, userUUID, req.query.viewer);
     if (!viewer) return refuseUnknownViewer(res, 'Stremio', userUUID, req.query.viewer);
     const event = scrobblesStremio(viewer) ? parseStremioEvent(resource, type, id, extra) : null;
@@ -6004,11 +6004,12 @@ function stremioEventRoute(resource) {
 
     require('./lib/stremioEventStatus').noteEvent(userUUID, profileForViewer(config, userUUID, req.query.viewer)?.id ?? '');
     const { viewerScope } = require('./lib/playbackHandler');
-    if (isRepeatEvent(viewerScope(userUUID, viewer), stremioEventTarget(event), stremioEventKey(event))) return;
+    const scope = viewerScope(userUUID, viewer);
+    if (isRepeatEvent(scope, stremioEventTarget(event), stremioEventKey(event))) return;
 
     const { runAsAccountOwner } = require('./lib/jellyfin/viewer');
     const { accountOwner } = require('./lib/accounts');
-    runAsAccountOwner(accountOwner(viewer), async () => {
+    runInOrder(`${scope}|${stremioEventSlot(event)}`, () => runAsAccountOwner(accountOwner(viewer), async () => {
       const playstate = require('./lib/jellyfin/playstate');
       if (event.resource === 'player') return playstate.recordStremioPlay(userUUID, viewer, event);
       if (event.action === 'watched' || event.action === 'unwatched') return playstate.recordStremioMark(userUUID, viewer, event);
@@ -6016,7 +6017,7 @@ function stremioEventRoute(resource) {
       const { setWatchlisted } = require('./lib/jellyfin/watchlist');
       const t = /^(kitsu|mal|anilist|anidb):/.test(event.metaId) ? 'anime' : event.type;
       await setWatchlisted(userUUID, viewer, { k: event.type, t, i: event.metaId }, event.action === 'libraryAdd');
-    }).catch((error) => consola.error(`[Stremio] ${resource} ${type}/${id} failed: ${error.message}`));
+    })).catch((error) => consola.error(`[Stremio] ${resource} ${type}/${id} failed: ${error.message}`));
   };
 }
 addon.get("/stremio/:userUUID/player/:type/:id/:extra.json", stremioEventRoute('player'));
