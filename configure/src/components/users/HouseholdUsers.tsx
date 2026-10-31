@@ -26,7 +26,6 @@ import { CARD_SERVICES, connectedServices, handoffNameClash, isHolder, pinInvali
 import { disconnectCardAccount } from '@/lib/integrationCredentials';
 import { useJellyfinServer } from '@/hooks/useJellyfinServer';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { MoreText } from '@/components/settings/MoreText';
 import { navigateToSettingsSection } from '@/lib/settingsRoute';
 import { scrobblesStremio, WATCH_TRACKING_SERVICE_DEFINITIONS, WATCH_TRACKING_SERVICES } from '@/lib/watchTracking';
 
@@ -108,7 +107,7 @@ function PinField({ name, pin, main, onChange }: { name: string; pin?: string; m
       {invalid ? (
         <p className="text-[11px] text-destructive">A PIN is 4 to 12 digits.</p>
       ) : (
-        <MoreText text={`To sign in as ${main ? 'you' : 'them'} on a client, enter the password, a slash and the PIN, like password/1234. Setting or changing it signs ${main ? 'you' : 'this user'} out on every device.`} />
+        <Note>Sign in on a client with the password, a slash and the PIN, like password/1234. Changing it signs {main ? 'you' : 'this user'} out everywhere.</Note>
       )}
     </div>
   );
@@ -209,6 +208,10 @@ function WatchedPointPicker({ name, point }: { name: string; point: WatchedPoint
   );
 }
 
+function Note({ children }: { children: ReactNode }) {
+  return <p className="text-[11px] text-muted-foreground">{children}</p>;
+}
+
 /** One setting: its name and a line on what it does on the left, the control on the right, details below. */
 function SettingRow({ label, description, control, children }: { label: string; description?: string; control?: ReactNode; children?: ReactNode }) {
   return (
@@ -259,7 +262,7 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
   const rawTrackerSource = user?.trackerSource;
   const trackerKnown = rawTrackerSource === 'auto' || rawTrackerSource === 'off' || trackerOptions.some((opt) => opt.value === rawTrackerSource);
   const trackerValue = holder && rawTrackerSource && !trackerKnown ? 'auto' : rawTrackerSource ?? (main || holder ? 'auto' : 'inherit');
-  const trackerCaption = trackerValue === 'inherit' ? 'Same as you: follows the choice on your own card.' : resumeSourceCaption(trackerValue, trackerOptions);
+  const trackerCaption = trackerValue === 'inherit' ? 'Same as you: follows your own card.' : resumeSourceCaption(trackerValue, trackerOptions);
 
   const badge = userBadge(user, Boolean(main));
   const canForget = Boolean(onForget) && (main || !samePerson);
@@ -329,7 +332,7 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
               onChange={(e) => onChange({ avatar: e.target.value || undefined })}
             />
           ) : (
-            <MoreText text={`${main ? 'Your Continue Watching, watched marks and trackers.' : samePerson ? 'You on these catalogs: shares your Continue Watching and watched marks, and writes your trackers; the picks below can still differ from your own card.' : holder ? 'Someone else, on their own accounts: their own Continue Watching, watched marks and watchlist, read from and written to the trackers connected below.' : 'Someone else: their own Continue Watching, watched marks and watchlist. Nothing they do reaches your trackers.'} Click the picture to change it.`} />
+            <Note>{main ? 'Your history and trackers.' : samePerson ? 'You on fewer catalogs: shares your history and writes your trackers; the picks below can differ.' : holder ? 'Someone else, on the accounts connected below.' : 'Someone else with their own history; nothing reaches your trackers.'} Click the picture to change it.</Note>
           )}
         </div>
       </div>
@@ -352,15 +355,15 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
             }
           >
             <SettingNotes>
-              <MoreText text={trackerCaption} />
+              <Note>{trackerCaption}</Note>
               {canForget && (
-                <MoreText text="The tracker read here is also imported into this server, history and resume points alike. What is imported stays when the choice changes, even to This server only; Forget imported history in the … menu clears it." />
+                <Note>What is read is also imported here and stays if you change this. Clear it with Forget imported history in the … menu.</Note>
               )}
               {main && (
-                <MoreText text="Whatever is picked, what is played through this server is remembered here and always wins over a tracker's view of the same title. Only services that store a playback position are offered, so AniList and MyAnimeList are not." />
+                <Note>Plays through this server always win over a tracker's view. Only services that store positions are listed, so not AniList or MyAnimeList.</Note>
               )}
               {main && trackerOptions.length === 0 && (
-                <MoreText text="No connected service stores playback positions, so only what is played through this server is shown. That is enough for a single client." />
+                <Note>No connected service stores positions, so only plays here are shown. Fine for a single client.</Note>
               )}
             </SettingNotes>
           </SettingRow>
@@ -368,7 +371,7 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
             <SettingRow label="Watchlist" description="The shelves a heart in a client reads from and writes to.">
               <WatchlistPicker value={user?.watchlistServices} options={watchlistOptions} onChange={(next) => onChange({ watchlistServices: next })} inheritLabel={main || holder ? 'Every connected shelf' : 'Same as you'} />
               <SettingNotes>
-                <MoreText text="A client's favourites are the watchlist: the picked shelves merged, and a heart on a title in a client writes to the shelves that take it. This server keeps the hearts set here as a list of its own, alone or alongside the picked shelves. MDBList and Trakt file anime under movies and series; Simkl, AniList and MyAnimeList keep an anime shelf." />
+                <Note>A heart in a client writes to the picked shelves that take that title. MDBList and Trakt file anime under movies and series; Simkl, AniList and MyAnimeList keep an anime shelf.</Note>
               </SettingNotes>
             </SettingRow>
           )}
@@ -392,7 +395,7 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
         <CardSection title="Catalogs">
           <SettingRow
             label="Tags"
-            description="This user sees the catalogs carrying any of the picked tags, under their rating limit. None picked shows every catalog."
+            description="This user sees the catalogs carrying any of the picked tags, under their rating limit. None picked shows every catalog. Tags are made in Catalogs."
           >
           <div className="flex flex-wrap items-center gap-1.5">
             {allTags.map((t) => (
@@ -537,19 +540,19 @@ function WatchlistPicker({ value, options, onChange, inheritLabel }: { value?: s
 
 function resumeSourceCaption(value: string, options: Array<{ value: string; label: string; animeOnly?: boolean }>): string {
   if (value === 'off') {
-    return 'This server only: Continue Watching, Next Up and the watched ticks come from what you play through this server, on this configuration. Nothing watched elsewhere appears, and nothing is read from your trackers; plays are still reported to them. Favourites follow the watchlist picks below, which have their own "This server".';
+    return 'This server only: Continue Watching, Next Up and the ticks come from plays here. Trackers are still told about plays but never read.';
   }
   if (value === 'auto') {
     const names = options.filter((o) => !o.animeOnly).map((o) => o.label);
     const list = names.length ? names.join(' and ') : 'a connected tracker';
-    return `Automatic: Continue Watching merges the paused titles of every connected tracker (${list}), newest first. The watched ticks, Next Up and Upcoming come from one of them, the first connected in the order MDBList, Simkl, PublicMetaDB. AniList and MyAnimeList are only read when picked.`;
+    return `Automatic: Continue Watching merges paused titles from ${list}, newest first. Ticks, Next Up and Upcoming come from the first connected of MDBList, Simkl, PublicMetaDB. AniList and MyAnimeList are read only when picked.`;
   }
   const option = options.find((o) => o.value === value);
   if (option?.animeOnly) {
-    return `${option.label} only: the watched ticks, Next Up and Upcoming come from your ${option.label} anime list, on top of what you play here. It covers anime alone, so other shows only appear from your plays here, and it keeps no positions, so Continue Watching is what you pause here. It also keeps a count of episodes watched rather than each one, so unwatching the latest episode lowers the count, while unwatching an earlier one leaves the count as it is and shows that episode unwatched here only.`;
+    return `${option.label} only: ticks, Next Up and Upcoming come from your ${option.label} anime list plus plays here. It covers anime only and keeps no positions, so Continue Watching is what you pause here. It counts episodes rather than tracking each, so unwatching an earlier episode shows only here.`;
   }
   const name = option?.label ?? 'that tracker';
-  return `${name} only: Continue Watching, the watched ticks, Next Up and Upcoming all come from ${name}, on top of what you play here. Pick this when two trackers disagree and you want one to win.`;
+  return `${name} only: Continue Watching, ticks, Next Up and Upcoming come from ${name} plus plays here. Pick it when trackers disagree.`;
 }
 
 const SKIP_PROVIDERS: Array<{ value: SkipProvider; label: string; note: string }> = [

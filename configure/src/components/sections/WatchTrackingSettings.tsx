@@ -16,7 +16,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Callout } from '@/components/settings/Callout';
-import { MoreText } from '@/components/settings/MoreText';
 import { WatchTrackingOptionsDialog } from '@/components/WatchTrackingOptionsDialog';
 import { HouseholdUsers } from '@/components/users/HouseholdUsers';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -33,7 +32,12 @@ import {
   WATCH_TRACKING_SERVICES,
 } from '@/lib/watchTracking';
 
-function ModeTile({ selected, title, badge, text, onSelect }: { selected: boolean; title: string; badge: string; text: string; onSelect: () => void }) {
+const MODE_KINDS = {
+  legacy: { label: 'Legacy', style: 'border-amber-500/40 text-amber-400' },
+  scrobble: { label: 'Scrobble', style: 'border-emerald-500/40 text-emerald-400' },
+} as const;
+
+function ModeTile({ selected, title, kind, badge, text, onSelect }: { selected: boolean; title: string; kind: keyof typeof MODE_KINDS; badge: string; text: string; onSelect: () => void }) {
   return (
     <button
       type="button"
@@ -45,9 +49,10 @@ function ModeTile({ selected, title, badge, text, onSelect }: { selected: boolea
         selected ? 'border-primary bg-primary/10' : 'hover:bg-accent/50',
       )}
     >
-      <span className="flex items-center gap-2 text-sm font-medium">
+      <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
         <span className={cn('h-3.5 w-3.5 shrink-0 rounded-full border-2', selected ? 'border-primary bg-primary' : 'border-muted-foreground/50')} aria-hidden="true" />
         {title}
+        <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide', MODE_KINDS[kind].style)}>{MODE_KINDS[kind].label}</span>
         <Badge variant="secondary" className="text-[10px]">{badge}</Badge>
       </span>
       <span className="pl-5 text-xs text-muted-foreground">{text}</span>
@@ -60,7 +65,7 @@ function SwitchRow({ id, label, hint, checked, onChange, nested }: { id: string;
     <div className={cn('flex items-center justify-between gap-4 py-3 pr-4', nested ? 'bg-muted/20 pl-10' : 'pl-4')}>
       <div className="min-w-0 flex-1 space-y-0.5">
         <Label htmlFor={id} className="font-medium">{label}</Label>
-        <MoreText text={hint} className="text-xs" />
+        <p className="text-xs text-muted-foreground">{hint}</p>
       </div>
       <Switch id={id} checked={checked} onCheckedChange={onChange} className="shrink-0" />
     </div>
@@ -106,6 +111,7 @@ export function WatchTrackingSettings() {
             <ModeTile
               selected={!config.playbackReporting}
               title="When a title is opened"
+              kind="legacy"
               badge="Any client"
               text="Works everywhere, but anything opened counts as watched, even if stopped a minute in."
               onSelect={() => setConfig(prev => ({ ...prev, playbackReporting: false }))}
@@ -113,6 +119,7 @@ export function WatchTrackingSettings() {
             <ModeTile
               selected={config.playbackReporting === true}
               title="When playback starts and stops"
+              kind="scrobble"
               badge="Stremio, Jellyfin"
               text="Something abandoned after a few minutes is kept as a resume point rather than marked watched."
               onSelect={() => setConfig(prev => ({ ...prev, playbackReporting: true }))}
@@ -123,7 +130,7 @@ export function WatchTrackingSettings() {
               <SwitchRow
                 id="stremio-scrobbling"
                 label="Stremio SDK"
-                hint="Plays, pauses and watched marks Stremio sends to the addon. Each user installs their own link, listed in Configuration."
+                hint="Plays, pauses and watched marks sent by Stremio. Each user installs their own link from Configuration."
                 checked={stremioOn}
                 onChange={(on) => setConfig(prev => ({ ...prev, stremioScrobbling: on, ...(on ? { stremioScrobblingSince: Date.now() } : {}) }))}
               />
@@ -132,7 +139,7 @@ export function WatchTrackingSettings() {
                   nested
                   id="stremio-library-watchlist"
                   label="Sync Stremio library with watchlists"
-                  hint="Adding a title to your Stremio library adds it to your watchlists; removing it removes it."
+                  hint="Adding or removing a title in your Stremio library does the same on your watchlists."
                   checked={config.stremioLibraryWatchlist === true}
                   onChange={(on) => setConfig(prev => ({ ...prev, stremioLibraryWatchlist: on }))}
                 />
@@ -140,7 +147,7 @@ export function WatchTrackingSettings() {
               <SwitchRow
                 id="jellyfin-scrobbling"
                 label="Jellyfin"
-                hint="This addon's Jellyfin server and AIOStreams' Jellyfin server. A favourite goes to your watchlist, and disliking a show marks it dropped."
+                hint="Plays on this addon's or AIOStreams' Jellyfin server. A favourite goes to your watchlist; disliking a show marks it dropped."
                 checked={jellyfinOn}
                 onChange={(on) => setConfig(prev => ({ ...prev, jellyfinScrobbling: on }))}
               />
@@ -254,10 +261,9 @@ export function WatchTrackingSettings() {
       <Card id="household-users">
         <CardHeader>
           <CardTitle>Users</CardTitle>
-          <MoreText
-            className="text-sm"
-            text="Everyone watching on this configuration, your own card first. Each user gets their own install link for Stremio under Configuration, and appears on the sign-in screen of this addon's Jellyfin server. A user is made of the tags picked for it: it sees the catalogs carrying any of them, under their rating limit. Someone else gets their own watch history and Continue Watching; a user that is you shares yours. Tags themselves are made in Catalogs."
-          />
+          <CardDescription>
+            Everyone watching, your card first. Each user gets a Stremio install link in Configuration and appears on the Jellyfin sign-in screen. Someone else keeps their own history; a user that is you shares yours.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <HouseholdUsers />
