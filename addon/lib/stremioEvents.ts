@@ -1,0 +1,84 @@
+import { LRUCache } from 'lru-cache';
+import { envInt } from '../utils/envNumber';
+import { parseStremioId, type Descriptor } from './jellyfin/idsCodec';
+
+export type PlayerAction = 'start' | 'pause' | 'stop';
+export type LibraryAction = 'libraryAdd' | 'libraryRemove' | 'watched' | 'unwatched';
+export type PlayerEvent = { resource: 'player'; type: 'movie' | 'series'; videoId: string; action: PlayerAction; positionMs: number; durationMs: number };
+export type LibraryEvent = { resource: 'library'; type: 'movie' | 'series'; metaId: string; action: LibraryAction; videoIds: string[] };
+export type StremioEvent = PlayerEvent | LibraryEvent;
+
+const PLAYER_ACTIONS: readonly string[] = ['start', 'pause', 'stop'];
+const LIBRARY_ACTIONS: readonly string[] = ['libraryAdd', 'libraryRemove', 'watched', 'unwatched'];
+const ANIME_ID = /^(kitsu|mal|anilist|anidb):/;
+
+function millis(value: string | null): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : 0;
+}
+
+function hasEpisode(id: string): boolean {
+  return typeof parseStremioId(id)?.episode === 'number';
+}
+
+export function parseStremioEvent(resource: string, type: string, id: string, extra: string): StremioEvent | null {
+  if (!id) return null;
+  const params = new URLSearchParams(extra || '');
+  const action = params.get('action') ?? '';
+  const known = type === 'movie' || type === 'series' ? type : null;
+
+  if (resource === 'player') {
+    if (!PLAYER_ACTIONS.includes(action)) return null;
+    return {
+      resource, type: known ?? (hasEpisode(id) ? 'series' : 'movie'), videoId: id, action: action as PlayerAction,
+      positionMs: millis(params.get('currentTime')), durationMs: millis(params.get('duration')),
+    };
+  }
+
+  if (resource === 'library') {
+    if (!LIBRARY_ACTIONS.includes(action)) return null;
+    const videoIds = (params.get('videoId') ?? '').split(',').map((v) => v.trim()).filter(Boolean);
+    let resolved = known;
+    if (!resolved) {
+      if (videoIds.length) resolved = 'series';
+      else if (action === 'libraryAdd' || action === 'libraryRemove') resolved = hasEpisode(id) ? null : 'series';
+    }
+    if (!resolved) return null;
+    return { resource, type: resolved, metaId: id, action: action as LibraryAction, videoIds };
+  }
+
+  return null;
+}
+
+export function stremioEventTarget(event: StremioEvent): string {
+  return event.resource === 'player' ? event.videoId : `${event.metaId}|${event.videoIds.join(',')}`;
+}
+
+export function stremioEventKey(event: StremioEvent): string {
+  return event.resource === 'player' ? `${event.action}|${event.positionMs}` : event.action;
+}
+
+// Each install of one config in a Stremio profile receives every event; only a repeat of the last one is dropped.
+const lastEvents = new LRUCache<string, string>({
+  max: 10000,
+  ttl: envInt('STREMIO_EVENT_DEDUPE_SECONDS', 60, 1) * 1000,
+});
+
+export function isRepeatEvent(scope: string, target: string, key: string): boolean {
+  const slot = `${scope}|${target}`;
+  const repeat = lastEvents.get(slot) === key;
+  lastEvents.set(slot, key);
+  return repeat;
+}
+
+export function descriptorForVideo(type: 'movie' | 'series', videoId: string): Descriptor | null {
+  const t = ANIME_ID.test(videoId) ? 'anime' : type;
+  if (type === 'movie') return { k: 'movie', t, i: videoId };
+  const parsed = parseStremioId(videoId);
+  if (!parsed || typeof parsed.episode !== 'number') return null;
+  return { k: 'episode', t, i: parsed.base, s: parsed.season, e: parsed.episode };
+}
+
+export function isPlayed(positionMs: number, durationMs: number, thresholdPercent: number): boolean {
+  return durationMs > 0 && (positionMs / durationMs) * 100 >= thresholdPercent;
+}
