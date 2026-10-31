@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
+import { withRowsFolded } from './collectionBuilder/homeOrder';
 const redisIdCache: any = require('./redis-id-cache');
 import consola from 'consola';
 
@@ -1217,9 +1218,9 @@ class Database {
     if (!row) return null;
 
     try {
-      return typeof row.config_data === 'string'
+      return withRowsFolded(typeof row.config_data === 'string'
         ? JSON.parse(row.config_data)
-        : row.config_data;
+        : row.config_data);
     } catch (error) {
       logger.error('Error parsing config data:', error);
       return null;
@@ -1352,9 +1353,9 @@ class Database {
     }
 
     try {
-      return typeof row.config_data === 'string'
+      return withRowsFolded(typeof row.config_data === 'string'
         ? JSON.parse(row.config_data)
-        : row.config_data;
+        : row.config_data);
     } catch (error) {
       logger.error('Error parsing user config:', error);
       return null;
