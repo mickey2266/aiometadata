@@ -2279,17 +2279,29 @@ function normalizeTvdbSeasons(seasons, episodes) {
  * A special whose tags cannot be read stays, so a TVDB outage hides nothing.
  */
 async function withoutNonCriticalSpecials(episodes, config) {
+  const unnamed = episodes.filter(ep => ep.seasonNumber === 0 && ep.id == null);
+  if (unnamed.length) logger.warn(`[TvdbSeriesMeta] Kept ${unnamed.length} specials TVDB lists without an episode id`);
   const specials = episodes.filter(ep => ep.seasonNumber === 0 && ep.id != null);
   if (!specials.length) return episodes;
   const { mapWithConcurrency } = require('../utils/concurrency');
-  const verdicts = await mapWithConcurrency(specials, 8, ep =>
-    tvdb.getEpisodeStoryCritical(String(ep.id), config).catch(() => null)
-  );
+  const lookup = ep => tvdb.getEpisodeStoryCritical(String(ep.id), config).catch(() => null);
+  // Kept low, as the other TVDB fan-outs are: a burst that trips the rate limit
+  // leaves specials unread, and so listed.
+  const verdicts = await mapWithConcurrency(specials, 4, lookup);
+  // A failed lookup is not cached, so one more pass, one at a time, usually reads it.
+  for (let index = 0; index < specials.length; index++) {
+    if (!verdicts[index]) verdicts[index] = await lookup(specials[index]);
+  }
   const hidden = new Set();
+  const unread = [];
   specials.forEach((ep, index) => {
-    if (verdicts[index] && verdicts[index].critical === false) hidden.add(ep.id);
+    if (!verdicts[index]) unread.push(ep);
+    else if (verdicts[index].critical === false) hidden.add(ep.id);
   });
-  if (hidden.size) logger.debug(`[TvdbSeriesMeta] Hiding ${hidden.size} of ${specials.length} specials not critical to the story`);
+  logger.debug(`[TvdbSeriesMeta] Hiding ${hidden.size} of ${specials.length} specials not critical to the story`);
+  if (unread.length) {
+    logger.warn(`[TvdbSeriesMeta] Kept ${unread.length} specials whose TVDB tags could not be read: ${unread.map(ep => `S0E${ep.number} (${ep.id})`).join(', ')}`);
+  }
   return hidden.size ? episodes.filter(ep => !(ep.seasonNumber === 0 && hidden.has(ep.id))) : episodes;
 }
 

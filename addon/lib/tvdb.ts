@@ -804,14 +804,17 @@ const STORY_CRITICAL_TAG_NAME = "special is critical to show's story";
 
 function isStoryCritical(tagOptions: any): boolean {
   if (!Array.isArray(tagOptions)) return false;
+  // The tag is a question: a special can carry it answered "No".
   return tagOptions.some((option: any) =>
     typeof option?.tagName === 'string' && option.tagName.trim().toLowerCase() === STORY_CRITICAL_TAG_NAME
+    && typeof option?.name === 'string' && option.name.trim().toLowerCase() === 'yes'
   );
 }
 
 /** Whether TVDB marks a special as part of the story. Null when it cannot be told. */
 async function getEpisodeStoryCritical(episodeId: string, config: UserConfig): Promise<{ critical: boolean } | null> {
-  return cacheWrapTvdbApi(`episode-story-critical:${episodeId}`, async () => {
+  // v2: verdicts cached before the answer was read counted a "No" as critical.
+  return cacheWrapTvdbApi(`episode-story-critical:v2:${episodeId}`, async () => {
     const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
     if (!token) return null;
     try {
@@ -819,10 +822,13 @@ async function getEpisodeStoryCritical(episodeId: string, config: UserConfig): P
         headers: { 'Authorization': `Bearer ${token}` },
       });
       const data = (response.data as any)?.data;
-      if (!data) return null;
+      if (!data) {
+        logger.debug(`TVDB episode ${episodeId} extended returned no data`);
+        return null;
+      }
       return { critical: isStoryCritical(data.tagOptions) };
     } catch (error) {
-      logger.debug(`TVDB episode ${episodeId} extended unavailable: ${(error as Error).message}`);
+      logger.warn(`TVDB episode ${episodeId} extended unavailable: ${(error as Error).message}`);
       return null;
     }
   });
