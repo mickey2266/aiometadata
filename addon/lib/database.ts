@@ -182,6 +182,22 @@ class Database {
     await this.ensureCopyJobColumns();
     await this.ensureRatingsMetaType();
     await this.ensureLeftOutKey();
+    await this.ensureFingerprintContributor();
+  }
+
+  async ensureFingerprintContributor(): Promise<void> {
+    try {
+      if (this.type === 'sqlite') {
+        const existing = await this.allQuery(`PRAGMA table_info(jellyfin_fingerprints)`);
+        if (existing.some((column: any) => column.name === 'contributor')) return;
+        await this.runQuery(`ALTER TABLE jellyfin_fingerprints ADD COLUMN contributor TEXT`);
+        logger.info('Migrated jellyfin_fingerprints: rows record who posted them');
+      } else {
+        await this.runQuery(`ALTER TABLE jellyfin_fingerprints ADD COLUMN IF NOT EXISTS contributor TEXT`);
+      }
+    } catch (error: any) {
+      logger.warn(`Could not add jellyfin_fingerprints.contributor: ${error.message}`);
+    }
   }
 
   /** A title left out is left out for one profile's import, which the first table did not key by. */
@@ -626,6 +642,7 @@ class Database {
         start_ms INTEGER NOT NULL,
         points TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
+        contributor TEXT,
         PRIMARY KEY (series_id, season, episode, kind)
       )`,
       `CREATE INDEX IF NOT EXISTS idx_jellyfin_fingerprints_updated ON jellyfin_fingerprints(updated_at)`,
@@ -956,6 +973,7 @@ class Database {
         start_ms BIGINT NOT NULL,
         points TEXT NOT NULL,
         updated_at BIGINT NOT NULL,
+        contributor TEXT,
         PRIMARY KEY (series_id, season, episode, kind)
       )`,
       `CREATE INDEX IF NOT EXISTS idx_jellyfin_fingerprints_updated ON jellyfin_fingerprints(updated_at)`,
@@ -2819,11 +2837,11 @@ class Database {
     await this.runQuery(`DELETE FROM jellyfin_tracker_mirror WHERE source_key = ${sqlite ? '?' : '$1'} AND group_key = ${sqlite ? '?' : '$2'} AND sub_key = ${sqlite ? '?' : '$3'}`, [sourceKey, group, sub]);
   }
 
-  async saveFingerprint(seriesId: string, season: number, episode: number, kind: string, startMs: number, points: string): Promise<void> {
+  async saveFingerprint(seriesId: string, season: number, episode: number, kind: string, startMs: number, points: string, contributor: string): Promise<void> {
     const query = this.type === 'sqlite'
-      ? 'INSERT INTO jellyfin_fingerprints (series_id, season, episode, kind, start_ms, points, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (series_id, season, episode, kind) DO UPDATE SET start_ms = excluded.start_ms, points = excluded.points, updated_at = excluded.updated_at'
-      : 'INSERT INTO jellyfin_fingerprints (series_id, season, episode, kind, start_ms, points, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (series_id, season, episode, kind) DO UPDATE SET start_ms = EXCLUDED.start_ms, points = EXCLUDED.points, updated_at = EXCLUDED.updated_at';
-    await this.runQuery(query, [seriesId, season, episode, kind, Math.round(startMs), points, Date.now()]);
+      ? 'INSERT INTO jellyfin_fingerprints (series_id, season, episode, kind, start_ms, points, updated_at, contributor) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (series_id, season, episode, kind) DO UPDATE SET start_ms = excluded.start_ms, points = excluded.points, updated_at = excluded.updated_at WHERE jellyfin_fingerprints.contributor = excluded.contributor'
+      : 'INSERT INTO jellyfin_fingerprints (series_id, season, episode, kind, start_ms, points, updated_at, contributor) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (series_id, season, episode, kind) DO UPDATE SET start_ms = EXCLUDED.start_ms, points = EXCLUDED.points, updated_at = EXCLUDED.updated_at WHERE jellyfin_fingerprints.contributor = EXCLUDED.contributor';
+    await this.runQuery(query, [seriesId, season, episode, kind, Math.round(startMs), points, Date.now(), contributor]);
   }
 
   async listFingerprints(seriesId: string, season: number, kind: string, episode: number, limit: number): Promise<any[]> {
