@@ -6015,18 +6015,6 @@ function CatalogsSettingsContent({
         setSelectedProviders={setTempSelectedProviders}
         onSave={handleCloseStreamingDialog}
       />
-      <MDBListIntegration
-        isOpen={isMdbListOpen}
-        onClose={() => setIsMdbListOpen(false)}
-      />
-      <TraktIntegration
-        isOpen={isTraktOpen}
-        onClose={() => setIsTraktOpen(false)}
-      />
-      <SimklIntegration
-        isOpen={isSimklOpen}
-        onClose={() => setIsSimklOpen(false)}
-      />
       <MovieLensIntegration
         isOpen={isMovieLensOpen}
         onClose={() => setIsMovieLensOpen(false)}
