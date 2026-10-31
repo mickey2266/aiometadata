@@ -125,6 +125,11 @@ export function missingWatchlistSlots(catalogs: Array<Pick<CatalogConfig, 'id'>>
   });
 }
 
+/** Names already count for every user card, and for the main user wherever playback reporting was on before. */
+export function showsAlsoKnownAs(config: { playbackReporting?: boolean; jellyfinUserHandoffNames?: string[] }, users: JellyfinUser[]): boolean {
+  return users.length > 0 || config.playbackReporting === true || Boolean(config.jellyfinUserHandoffNames?.length);
+}
+
 export function handoffNameClash(mainName: string, mainHandoff: string[] | undefined, users: JellyfinUser[]): string | null {
   const owners = new Map<string, string>();
   const claim = (owner: string, names: Array<string | undefined>): string | null => {

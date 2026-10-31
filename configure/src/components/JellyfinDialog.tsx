@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import { TagChip } from "@/components/TagChip";
 import { MAX_TAG_NAME_LENGTH, type CatalogConfig, type JellyfinUser, type SkipProvider, type SkipSource, type TagDef } from "@/contexts/config";
 import { UserAccounts } from "@/components/jellyfin/UserAccounts";
-import { CARD_SERVICES, connectedServices, handoffNameClash, isHolder, trackerOptionsFor, watchlistOptionsFor } from "@/lib/cardAccounts";
+import { CARD_SERVICES, connectedServices, handoffNameClash, isHolder, showsAlsoKnownAs, trackerOptionsFor, watchlistOptionsFor } from "@/lib/cardAccounts";
 import { disconnectCardAccount } from "@/lib/integrationCredentials";
 import { scrobblesStremio, stremioLinkState, withViewer, type StremioLinkState } from "@/lib/watchTracking";
 import { useStremioLinkStatus } from "@/hooks/useStremioLinkStatus";
@@ -681,7 +681,7 @@ export function JellyfinDialog({ open, onOpenChange, userUUID }: JellyfinDialogP
   const addCatalogs = (entries: CatalogConfig[]) =>
     setConfig(prev => ({ ...prev, catalogs: [...prev.catalogs, ...entries.filter((e) => !prev.catalogs.some((c) => c.id === e.id && c.type === e.type))] }));
   const nameClash = handoffNameClash(mainName, config.jellyfinUserHandoffNames, users);
-  const showHandoff = users.length > 0 || Boolean(config.jellyfinUserHandoffNames?.length);
+  const showHandoff = showsAlsoKnownAs(config, users);
   const stremioInstallFor = (cardId: string): UserRowProps['stremioInstall'] => {
     if (!stremioOn || !auth.installUrl) return undefined;
     const url = cardId ? withViewer(auth.installUrl, cardId) : auth.installUrl;
