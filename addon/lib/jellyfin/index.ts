@@ -548,18 +548,18 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       return res.send(JSON.stringify(body, jsonReplacer(appleTv)));
     };
     res.json = (input: any) => {
-      // A client that keeps the first versions it sees, and builds its picker from a
-      // listing, is sent none there, so the first it keeps are the item's own, resolved
-      // when it is opened. Items are copied: a listing can be cut from a held shelf.
-      const body = Array.isArray(input?.Items) && clientListed(req, 'JELLYFIN_LISTED_SOURCES_OMIT_CLIENTS')
-        ? {
-            ...input,
-            Items: input.Items.map((item: any) => {
-              if (!item || typeof item !== 'object' || !('MediaSources' in item)) return item;
-              const { MediaSources: _sources, ...rest } = item;
-              return rest;
-            }),
-          }
+      // A client that keeps the first versions it sees is sent none on a listed
+      // title, placeholders included, so the only ones it holds come from
+      // PlaybackInfo. Items are copied: a listing can be cut from a held shelf.
+      // Latest answers with a bare array; a list of versions has no MediaSources to lose.
+      const withoutSources = (items: any[]) => items.map((item: any) => {
+        if (!item || typeof item !== 'object' || !('MediaSources' in item)) return item;
+        const { MediaSources: _sources, ...rest } = item;
+        return rest;
+      });
+      const listed = Array.isArray(input) || Array.isArray(input?.Items);
+      const body = listed && playbackSourcesOnly(req)
+        ? Array.isArray(input) ? withoutSources(input) : { ...input, Items: withoutSources(input.Items) }
         : input;
       const rating = res.statusCode < 300 ? withCriticRatings(body, oneIdAsked(req.query)) : null;
       if (!rating) return send(body);
@@ -1730,6 +1730,11 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
   };
 
   const attachSourcesInTime = async (req: any, item: any, descriptor: any, itemId: string): Promise<void> => {
+    // Neither placeholders nor a resolve: such a client gets its versions from PlaybackInfo.
+    if (playbackSourcesOnly(req)) {
+      delete item.MediaSources;
+      return;
+    }
     if (req.params?.listed && !req.params?.lookup) return;
     const asked = req.params?.forceSources || asksForSources(req);
     const known = asked ? null : await streamsKnown(req, descriptor);
@@ -2654,6 +2659,9 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const seen = `${clientInfo(req).client} ${req.get('user-agent') || ''}`.toLowerCase();
     return names.some((name) => seen.includes(name));
   };
+
+  // Clients that keep the first versions they see get them only when they play.
+  const playbackSourcesOnly = (req: any): boolean => clientListed(req, 'JELLYFIN_PLAYBACK_SOURCES_ONLY_CLIENTS');
 
   const relaysImages = (req: any): boolean => {
     const { getSetting } = require('../settingsService');
