@@ -86,6 +86,11 @@ export function scrobblesStremio(config: AppConfig): boolean {
   return config.playbackReporting === true && config.stremioScrobbling === true;
 }
 
+/** Mirrors the manifest: the Stremio events are declared with the switch alone. */
+export function declaresStremioEvents(config: AppConfig): boolean {
+  return scrobblesStremio(config);
+}
+
 export type StremioLinkState = 'reinstall' | 'waiting' | 'ok';
 
 export function stremioLinkState(
