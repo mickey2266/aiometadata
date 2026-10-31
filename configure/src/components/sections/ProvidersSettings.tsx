@@ -234,7 +234,7 @@ export function ProvidersSettings() {
       {/* TVDB Specific Settings */}
       <CollapsibleSettingCard
         title="TheTVDB Settings"
-        anchorIds={['tvdb-season-order', 'tvdb-normalize-year-seasons']}
+        anchorIds={['tvdb-season-order', 'tvdb-normalize-year-seasons', 'tvdb-hide-non-critical-specials']}
         inUse={isInUse(config, 'tvdb')}
         description={hasTvdbKey
           ? 'Customize how episode data is fetched from TheTVDB.'
@@ -266,6 +266,19 @@ export function ProvidersSettings() {
               id="tvdb-normalize-year-seasons"
               checked={config.tvdbNormalizeYearSeasons !== false}
               onCheckedChange={(val) => setConfig(prev => ({ ...prev, tvdbNormalizeYearSeasons: val }))}
+              disabled={!hasTvdbKey}
+            />
+          }
+        />
+        <SettingRow
+          htmlFor="tvdb-hide-non-critical-specials"
+          label="Hide Non-Essential Specials"
+          description="Hide specials (season 0) that TVDB doesn't mark as critical to the show's story. Specials TVDB can't be asked about stay listed."
+          control={
+            <Switch
+              id="tvdb-hide-non-critical-specials"
+              checked={config.tvdbHideNonCriticalSpecials === true}
+              onCheckedChange={(val) => setConfig(prev => ({ ...prev, tvdbHideNonCriticalSpecials: val }))}
               disabled={!hasTvdbKey}
             />
           }

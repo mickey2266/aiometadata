@@ -21,6 +21,7 @@ const SHARED_SETTING_KEYS = [
   'tvdbSeasonType',
   'animeEpisodeDates',
   'tvdbNormalizeYearSeasons',
+  'tvdbHideNonCriticalSpecials',
   'language',
   'contentRatingCountry',
   'ageRating',

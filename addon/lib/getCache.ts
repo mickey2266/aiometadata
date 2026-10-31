@@ -949,6 +949,7 @@ function getMetaCacheContext(config: any, metaId: string, type: string | null, u
       },
       ...(context.metaProvider === 'tvdb' ? { tvdbSeasonType: config.tvdbSeasonType || 'default' } : {}),
       ...(context.metaProvider === 'tvdb' && readsBySeason(config.tvdbSeasonType) ? { episodeSource: 'seasons' } : {}),
+      ...(context.metaProvider === 'tvdb' && config.tvdbHideNonCriticalSpecials === true ? { hideNonCriticalSpecials: true } : {}),
     };
   } else if (type === 'movie') {
     context.metaProvider = config.providers?.movie || 'tmdb';
@@ -982,6 +983,7 @@ function getMetaCacheContext(config: any, metaId: string, type: string | null, u
     context.videoOptions = {
       tvdbSeasonType: config.tvdbSeasonType || 'default',
       ...(readsBySeason(config.tvdbSeasonType) ? { episodeSource: 'seasons' } : {}),
+      ...(config.tvdbHideNonCriticalSpecials === true ? { hideNonCriticalSpecials: true } : {}),
       forceAnimeForDetectedImdb: config.providers?.forceAnimeForDetectedImdb || false,
       ...(config.providers?.forceAnimeForDetectedImdb
         ? {

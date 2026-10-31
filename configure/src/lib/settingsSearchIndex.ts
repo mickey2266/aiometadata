@@ -292,6 +292,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['tvdb', 'season', 'year', 'normalize', 'numbering'],
   },
   {
+    id: 'providers.tvdbHideNonCriticalSpecials', section: 'providers', anchor: 'tvdb-hide-non-critical-specials',
+    label: 'Hide Non-Essential Specials',
+    description: "Hide specials TVDB doesn't mark as critical to the show's story.",
+    keywords: ['tvdb', 'specials', 'season 0', 'hide', 'critical', 'story', 'extras'],
+  },
+  {
     id: 'providers.scrapeImdb', section: 'providers', anchor: 'scrape-imdb',
     label: 'Scrape IMDb Data',
     description: "Automatically scrape additional data from IMDb to obtain IMDb ID when missing from TMDB. This is useful for sports events and other content that doesn't have an IMDb ID in TMDB.",

@@ -798,6 +798,36 @@ async function getEpisodeNumbering(episodeId: string, config: UserConfig): Promi
   });
 }
 
+// The tag TVDB sets on a special that is part of the story, read only from
+// /episodes/{id}/extended.
+const STORY_CRITICAL_TAG_NAME = "special is critical to show's story";
+
+function isStoryCritical(tagOptions: any): boolean {
+  if (!Array.isArray(tagOptions)) return false;
+  return tagOptions.some((option: any) =>
+    typeof option?.tagName === 'string' && option.tagName.trim().toLowerCase() === STORY_CRITICAL_TAG_NAME
+  );
+}
+
+/** Whether TVDB marks a special as part of the story. Null when it cannot be told. */
+async function getEpisodeStoryCritical(episodeId: string, config: UserConfig): Promise<{ critical: boolean } | null> {
+  return cacheWrapTvdbApi(`episode-story-critical:${episodeId}`, async () => {
+    const token = await getAuthToken(config.apiKeys?.tvdb, config.userUUID);
+    if (!token) return null;
+    try {
+      const response = await tvdbHttpRequest(`${TVDB_API_URL}/episodes/${episodeId}/extended`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = (response.data as any)?.data;
+      if (!data) return null;
+      return { critical: isStoryCritical(data.tagOptions) };
+    } catch (error) {
+      logger.debug(`TVDB episode ${episodeId} extended unavailable: ${(error as Error).message}`);
+      return null;
+    }
+  });
+}
+
 async function _fetchEpisodesBySeasonType(tvdbId: string, seasonType: string, language: string, config: UserConfig): Promise<{ episodes: TvdbEpisode[] } | null> {
   const token = await getAuthTokenOrThrow(config.apiKeys?.tvdb, config.userUUID);
   if (!token) return null;
@@ -1420,6 +1450,7 @@ async function getCollectionTranslations(collectionId: string, language: string,
 
 export {
   getEpisodeNumbering,
+  getEpisodeStoryCritical,
   tvdbIdFromRemoteIdResults,
   searchSeries,
   searchMovies,
@@ -1467,6 +1498,7 @@ const __privateTvdbCacheNormalizers = tvdbCacheNormalizers;
 // CommonJS compatibility
 module.exports = {
   getEpisodeNumbering,
+  getEpisodeStoryCritical,
   tvdbIdFromRemoteIdResults,
   searchSeries,
   searchMovies,

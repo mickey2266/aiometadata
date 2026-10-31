@@ -2274,6 +2274,25 @@ function normalizeTvdbSeasons(seasons, episodes) {
 
 
 
+/**
+ * Drops the specials TVDB does not tag "Special is Critical to Show's Story".
+ * A special whose tags cannot be read stays, so a TVDB outage hides nothing.
+ */
+async function withoutNonCriticalSpecials(episodes, config) {
+  const specials = episodes.filter(ep => ep.seasonNumber === 0 && ep.id != null);
+  if (!specials.length) return episodes;
+  const { mapWithConcurrency } = require('../utils/concurrency');
+  const verdicts = await mapWithConcurrency(specials, 8, ep =>
+    tvdb.getEpisodeStoryCritical(String(ep.id), config).catch(() => null)
+  );
+  const hidden = new Set();
+  specials.forEach((ep, index) => {
+    if (verdicts[index] && verdicts[index].critical === false) hidden.add(ep.id);
+  });
+  if (hidden.size) logger.debug(`[TvdbSeriesMeta] Hiding ${hidden.size} of ${specials.length} specials not critical to the story`);
+  return hidden.size ? episodes.filter(ep => !(ep.seasonNumber === 0 && hidden.has(ep.id))) : episodes;
+}
+
 async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, language, config, userUUID, enrichmentData = {}, isAnime = false, includeVideos = true) {
   const { year, image: tvdbPosterPath, remoteIds, characters, episodes } = tvdbShow;
   const { allIds } = enrichmentData;
@@ -2405,6 +2424,10 @@ async function buildTvdbSeriesResponse(stremioId, tvdbShow, tvdbEpisodes, langua
   const normalizedData = normalizeTvdbSeasons(officialSeasons, episodeList);
   officialSeasons = normalizedData.seasons;
   episodeList = normalizedData.episodes;
+
+  if (includeVideos && config.tvdbHideNonCriticalSpecials === true) {
+    episodeList = await withoutNonCriticalSpecials(episodeList, config);
+  }
 
   const seasonPosters = {};
   officialSeasons.forEach(season => {
