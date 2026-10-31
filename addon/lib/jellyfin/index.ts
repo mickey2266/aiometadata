@@ -1730,9 +1730,16 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
   };
 
   const attachSourcesInTime = async (req: any, item: any, descriptor: any, itemId: string): Promise<void> => {
-    // Neither placeholders nor a resolve: such a client gets its versions from PlaybackInfo.
+    // Never placeholders and never a wait: versions already resolved are attached,
+    // anything else comes from PlaybackInfo. With none on the item to fall back
+    // on, attachSources adds nothing if the held list turns out empty.
     if (playbackSourcesOnly(req)) {
       delete item.MediaSources;
+      if (req.params?.listed && !req.params?.lookup) return;
+      if ((await streamsKnown(req, descriptor)) !== 'cached') return;
+      await attachSources(req, item, descriptor, itemId).catch((error: any) =>
+        logger.debug(`Cached sources for ${itemId} unavailable: ${error?.message || error}`)
+      );
       return;
     }
     if (req.params?.listed && !req.params?.lookup) return;

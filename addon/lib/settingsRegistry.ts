@@ -2143,7 +2143,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'JELLYFIN_PLAYBACK_SOURCES_ONLY_CLIENTS',
     envVar: 'JELLYFIN_PLAYBACK_SOURCES_ONLY_CLIENTS',
     label: 'Jellyfin Clients With Versions Only At Playback',
-    description: 'Comma-separated client names, matched against the client name and user agent, that are sent no versions on any title, in a list or opened on its own, not even the "Streams load when played" placeholders, and whose title pages never wait for streams. Their versions come only from PlaybackInfo, when play is pressed. For a client such as SenPlayer that keeps the first versions it sees. A client that treats a title without versions as unplayable will offer no play button. Its cache has to be cleared once for titles it already holds.',
+    description: 'Comma-separated client names, matched against the client name and user agent, that are never sent the "Streams load when played" placeholders and whose title pages never wait for streams. A title in a list carries no versions; a title opened on its own carries them only if they were already resolved. Otherwise they come from PlaybackInfo, when play is pressed. For a client such as SenPlayer that keeps the first versions it sees. A client that treats a title without versions as unplayable will offer no play button. Its cache has to be cleared once for titles it already holds.',
     category: 'Features',
     type: 'string',
     default: 'senplayer',
