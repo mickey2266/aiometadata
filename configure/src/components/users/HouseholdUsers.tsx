@@ -256,7 +256,8 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
   const samePerson = main || user?.trackers === true;
   const holder = !main && isHolder(user);
   const [pictureOpen, setPictureOpen] = useState(false);
-  const [jellyfinOpen, setJellyfinOpen] = useState(() => pinInvalid(user?.pin));
+  // Open from the start when something there needs attention: a bad PIN, or no addon to play from.
+  const [jellyfinOpen, setJellyfinOpen] = useState(() => pinInvalid(user?.pin) || Boolean(main && !user?.streamUrl));
 
   const scope = `${catalogCount} catalog${catalogCount === 1 ? '' : 's'}`;
   const capNote = caps.length ? <span className="rounded-full border border-amber-500/40 px-1.5 text-[11px] text-amber-400">{caps.join(', ')} and lower</span> : null;
@@ -438,21 +439,24 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
           </button>
           {jellyfinOpen ? (
             <div className="mt-2 divide-y">
-              {!main && (
-                <SettingRow
-                  label="Stream addon"
-                  description="An addon this user plays from instead of the one in the Jellyfin settings. Empty follows yours."
-                  control={
-                    <Input
-                      className="h-8 text-xs"
-                      placeholder="Same as you"
-                      aria-label={`Stream addon of ${name}`}
-                      value={user?.streamUrl ?? ''}
-                      onChange={(e) => onChange({ streamUrl: e.target.value.trim() ? e.target.value : undefined })}
-                    />
-                  }
-                />
-              )}
+              <SettingRow
+                label="Stream addon"
+                description={main
+                  ? "The addon titles play from on Jellyfin, such as your AIOStreams. Without one, titles browse but won't play. Also in the Jellyfin settings under Configuration."
+                  : 'An addon this user plays from instead of yours. Empty follows yours.'}
+                control={
+                  <Input
+                    id={main ? 'jellyfin-main-stream-url' : undefined}
+                    className="h-8 font-mono text-xs"
+                    placeholder={main ? 'https://your-aiostreams/stremio/<config>/manifest.json' : 'Same as you'}
+                    aria-label={`Stream addon of ${name}`}
+                    value={user?.streamUrl ?? ''}
+                    onChange={(e) => onChange({ streamUrl: e.target.value.trim() ? e.target.value : undefined })}
+                  />
+                }
+              >
+                {main && !user?.streamUrl ? <p className="text-[11px] text-amber-400">No stream addon set, so Jellyfin clients can browse but not play.</p> : null}
+              </SettingRow>
               <SettingRow
                 label="PIN"
                 description={main ? 'Asked whenever another user switches to you.' : 'Asked whenever someone switches to this user.'}
@@ -868,6 +872,7 @@ export function HouseholdUsers() {
           watchlistServices: config.jellyfinWatchlistServices,
           handoffNames: config.jellyfinUserHandoffNames,
           pin: config.jellyfinUserPin,
+          streamUrl: config.jellyfinStreamUrl,
         }}
         allTags={tags}
         catalogCount={catalogCountFor(config.jellyfinUserTags ?? [])}
@@ -893,6 +898,7 @@ export function HouseholdUsers() {
           ...('watchlistServices' in patch ? { jellyfinWatchlistServices: patch.watchlistServices } : {}),
           ...('handoffNames' in patch ? { jellyfinUserHandoffNames: patch.handoffNames } : {}),
           ...('pin' in patch ? { jellyfinUserPin: patch.pin } : {}),
+          ...('streamUrl' in patch ? { jellyfinStreamUrl: patch.streamUrl } : {}),
         }))}
       />
       {users.map((user) => {

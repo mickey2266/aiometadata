@@ -81,6 +81,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['users', 'profiles', 'family', 'household', 'pin', 'viewer', 'also known as'],
   },
   {
+    id: 'watch-tracking.jellyfinStreamUrl', section: 'watch-tracking', anchor: 'household-users',
+    label: 'Jellyfin Stream Addon',
+    description: 'The addon Jellyfin clients play titles from, such as AIOStreams. On your user card, under Jellyfin.',
+    keywords: ['jellyfin', 'stream', 'addon', 'playback', 'aiostreams', 'play'],
+  },
+  {
     id: 'watch-tracking.stremioScrobbling', section: 'watch-tracking', anchor: 'stremio-scrobbling',
     label: 'Stremio SDK Scrobbling',
     description: 'Record plays, pauses and watched marks Stremio sends to the addon.',

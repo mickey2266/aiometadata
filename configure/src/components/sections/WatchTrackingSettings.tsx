@@ -34,16 +34,6 @@ import {
 } from '@/lib/watchTracking';
 import { useStremioLinkStatus } from '@/hooks/useStremioLinkStatus';
 
-const SECTIONS = [
-  { id: 'wt-recording', label: 'Recording' },
-  { id: 'wt-services', label: 'Services' },
-  { id: 'household-users', label: 'Users' },
-] as const;
-
-function jumpTo(id: string) {
-  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
 function ModeTile({ selected, title, badge, text, onSelect }: { selected: boolean; title: string; badge: string; text: string; onSelect: () => void }) {
   return (
     <button
@@ -89,7 +79,6 @@ export function WatchTrackingSettings() {
   const jellyfinOn = scrobblesJellyfin(config);
   const stremioStatus = useStremioLinkStatus(stremioOn);
   const stremioLabel = stremioStatus ? stremioLinkState(config.stremioScrobblingSince, stremioStatus['']) : null;
-  const userCount = 1 + (config.jellyfinUsers?.length ?? 0);
 
   const setMaster = (service: WatchTrackingService, on: boolean) => {
     const { masterKey, hasCredential } = WATCH_TRACKING_SERVICE_DEFINITIONS[service];
@@ -104,15 +93,6 @@ export function WatchTrackingSettings() {
         <p className="text-muted-foreground mt-1">Choose how plays are recorded, which services hear about them, and who is watching.</p>
       </div>
 
-      <nav aria-label="Watch Tracking sections" className="sticky top-0 z-20 -mx-1 flex flex-wrap gap-1.5 rounded-lg border bg-background/95 p-1.5 backdrop-blur">
-        {SECTIONS.map((section) => (
-          <Button key={section.id} type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => jumpTo(section.id)}>
-            {section.label}
-            {section.id === 'household-users' ? <span className="ml-1.5 rounded-full bg-muted px-1.5 text-[10px] tabular-nums">{userCount}</span> : null}
-          </Button>
-        ))}
-      </nav>
-
       {!anyServiceConnected(config) ? (
         <Callout variant="warn">
           No tracking service is connected, so plays are kept only on this server. Connect Simkl, AniList or MyAnimeList in{' '}
@@ -122,7 +102,7 @@ export function WatchTrackingSettings() {
         </Callout>
       ) : null}
 
-      <Card id="wt-recording" className="scroll-mt-16">
+      <Card id="wt-recording">
         <CardHeader>
           <CardTitle>Recording</CardTitle>
           <CardDescription>When a play counts, for every service and every user.</CardDescription>
@@ -187,7 +167,7 @@ export function WatchTrackingSettings() {
         </CardContent>
       </Card>
 
-      <Card id="wt-services" className="scroll-mt-16">
+      <Card id="wt-services">
         <CardHeader>
           <CardTitle>Services</CardTitle>
           <CardDescription>Where your plays are recorded. A user with accounts of their own uses those instead.</CardDescription>
@@ -286,7 +266,7 @@ export function WatchTrackingSettings() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Card id="household-users" className="scroll-mt-16">
+      <Card id="household-users">
         <CardHeader>
           <CardTitle>Users</CardTitle>
           <MoreText
