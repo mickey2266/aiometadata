@@ -1,8 +1,7 @@
-import { useState } from 'react';
-import { Settings2 } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { CheckCircle2, CircleDashed, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -16,222 +15,235 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Callout } from '@/components/settings/Callout';
+import { MoreText } from '@/components/settings/MoreText';
 import { WatchTrackingOptionsDialog } from '@/components/WatchTrackingOptionsDialog';
 import { HouseholdUsers } from '@/components/users/HouseholdUsers';
 import { useConfig } from '@/contexts/ConfigContext';
 import type { WatchTrackingService } from '@/contexts/config';
 import { navigateToSettingsSection } from '@/lib/settingsRoute';
+import { cn } from '@/lib/utils';
 import {
-  getWatchTrackingMediaTypeSummary,
+  anyServiceConnected,
+  isWatchTrackingMediaTypeSelected,
   scrobblesJellyfin,
   scrobblesStremio,
   stremioLinkState,
   WATCH_TRACKING_SERVICE_DEFINITIONS,
+  WATCH_TRACKING_SERVICES,
 } from '@/lib/watchTracking';
 import { useStremioLinkStatus } from '@/hooks/useStremioLinkStatus';
+
+const SECTIONS = [
+  { id: 'wt-recording', label: 'Recording' },
+  { id: 'wt-services', label: 'Services' },
+  { id: 'household-users', label: 'Users' },
+] as const;
+
+function jumpTo(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function ModeTile({ selected, title, badge, text, onSelect }: { selected: boolean; title: string; badge: string; text: string; onSelect: () => void }) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      className={cn(
+        'flex flex-1 flex-col gap-1 rounded-lg border p-3 text-left transition-colors',
+        selected ? 'border-primary bg-primary/10' : 'hover:bg-accent/50',
+      )}
+    >
+      <span className="flex items-center gap-2 text-sm font-medium">
+        <span className={cn('h-3.5 w-3.5 shrink-0 rounded-full border-2', selected ? 'border-primary bg-primary' : 'border-muted-foreground/50')} aria-hidden="true" />
+        {title}
+        <Badge variant="secondary" className="text-[10px]">{badge}</Badge>
+      </span>
+      <span className="pl-5 text-xs text-muted-foreground">{text}</span>
+    </button>
+  );
+}
+
+function SwitchRow({ id, label, hint, status, checked, onChange, nested }: { id: string; label: string; hint: string; status?: ReactNode; checked: boolean; onChange: (on: boolean) => void; nested?: boolean }) {
+  return (
+    <div className={cn('flex flex-wrap items-center justify-between gap-x-4 gap-y-1 p-2 transition-colors hover:bg-accent/50', nested ? 'ml-3 rounded-r-lg border-l border-border pl-4' : 'rounded-lg')}>
+      <div className="min-w-[12rem] flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <Label htmlFor={id} className="font-medium">{label}</Label>
+          {status}
+        </div>
+        <MoreText text={hint} className="text-xs" />
+      </div>
+      <Switch id={id} checked={checked} onCheckedChange={onChange} />
+    </div>
+  );
+}
 
 export function WatchTrackingSettings() {
   const { config, setConfig } = useConfig();
   const [watchTrackingService, setWatchTrackingService] = useState<WatchTrackingService | null>(null);
+  const [connectPrompt, setConnectPrompt] = useState<WatchTrackingService | null>(null);
   const stremioOn = scrobblesStremio(config);
+  const jellyfinOn = scrobblesJellyfin(config);
   const stremioStatus = useStremioLinkStatus(stremioOn);
   const stremioLabel = stremioStatus ? stremioLinkState(config.stremioScrobblingSince, stremioStatus['']) : null;
-  const [connectPrompt, setConnectPrompt] = useState<WatchTrackingService | null>(null);
+  const userCount = 1 + (config.jellyfinUsers?.length ?? 0);
 
-  const handleMDBListTrackingChange = (checked: boolean) => {
-    setConfig(prevConfig => ({ ...prevConfig, mdblistWatchTracking: checked }));
-  };
-
-  const handleAniListTrackingChange = (checked: boolean) => {
-    setConfig(prevConfig => ({ ...prevConfig, anilistWatchTracking: checked }));
-  };
-
-  const handleMalTrackingChange = (checked: boolean) => {
-    setConfig(prevConfig => ({ ...prevConfig, malWatchTracking: checked }));
-  };
-
-  const handleSimklTrackingChange = (checked: boolean) => {
-    setConfig(prevConfig => ({ ...prevConfig, simklWatchTracking: checked }));
-  };
-
-  const handlePublicMetaDBTrackingChange = (checked: boolean) => {
-    setConfig(prevConfig => ({ ...prevConfig, publicmetadbWatchTracking: checked }));
-  };
-
-  const renderWatchTrackingControls = (
-    service: WatchTrackingService,
-    switchId: string,
-    checked: boolean,
-    onCheckedChange: (checked: boolean) => void,
-  ) => {
-    const handleToggle = (next: boolean) => {
-      onCheckedChange(next);
-      if (next && !WATCH_TRACKING_SERVICE_DEFINITIONS[service].hasCredential(config)) {
-        setConnectPrompt(service);
-      }
-    };
-
-    return (
-    <div className="flex items-center gap-1 shrink-0">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="h-9 w-9"
-        aria-label={`Configure ${WATCH_TRACKING_SERVICE_DEFINITIONS[service].label} watch tracking types`}
-        title="Configure media types"
-        onClick={() => setWatchTrackingService(service)}
-      >
-        <Settings2 className="h-4 w-4 text-muted-foreground" />
-      </Button>
-      <Switch id={switchId} checked={checked} onCheckedChange={handleToggle} />
-    </div>
-    );
+  const setMaster = (service: WatchTrackingService, on: boolean) => {
+    const { masterKey, hasCredential } = WATCH_TRACKING_SERVICE_DEFINITIONS[service];
+    setConfig(prev => ({ ...prev, [masterKey]: on }));
+    if (on && !hasCredential(config)) setConnectPrompt(service);
   };
 
   return (
-    <div className="space-y-8 animate-fade-in">
+    <div className="space-y-6 animate-fade-in">
       <div>
         <h2 className="text-2xl font-semibold">Watch Tracking</h2>
         <p className="text-muted-foreground mt-1">Choose how plays are recorded, which services hear about them, and who is watching.</p>
       </div>
 
-      <Card>
+      <nav aria-label="Watch Tracking sections" className="sticky top-0 z-20 -mx-1 flex flex-wrap gap-1.5 rounded-lg border bg-background/95 p-1.5 backdrop-blur">
+        {SECTIONS.map((section) => (
+          <Button key={section.id} type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => jumpTo(section.id)}>
+            {section.label}
+            {section.id === 'household-users' ? <span className="ml-1.5 rounded-full bg-muted px-1.5 text-[10px] tabular-nums">{userCount}</span> : null}
+          </Button>
+        ))}
+      </nav>
+
+      {!anyServiceConnected(config) ? (
+        <Callout variant="warn">
+          No tracking service is connected, so plays are kept only on this server. Connect Simkl, AniList or MyAnimeList in{' '}
+          <button type="button" className="font-medium underline underline-offset-2" onClick={() => navigateToSettingsSection('catalogs')}>Catalogs</button>
+          , or MDBList or PublicMetaDB in{' '}
+          <button type="button" className="font-medium underline underline-offset-2" onClick={() => navigateToSettingsSection('integrations')}>Integrations</button>.
+        </Callout>
+      ) : null}
+
+      <Card id="wt-recording" className="scroll-mt-16">
         <CardHeader>
-          <CardTitle>How plays are recorded</CardTitle>
-          <CardDescription>Record what you watch to the services you have connected below.</CardDescription>
+          <CardTitle>Recording</CardTitle>
+          <CardDescription>When a play counts, for every service and every user.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div id="playback-detection" role="radiogroup" aria-label="When to record" className="flex flex-col gap-2 md:flex-row">
+            <ModeTile
+              selected={!config.playbackReporting}
+              title="When a title is opened"
+              badge="Any client"
+              text="Works everywhere, but anything opened counts as watched, even if stopped a minute in."
+              onSelect={() => setConfig(prev => ({ ...prev, playbackReporting: false }))}
+            />
+            <ModeTile
+              selected={config.playbackReporting === true}
+              title="When playback starts and stops"
+              badge="Stremio, Jellyfin"
+              text="Something abandoned after a few minutes is kept as a resume point rather than marked watched."
+              onSelect={() => setConfig(prev => ({ ...prev, playbackReporting: true }))}
+            />
+          </div>
+          {config.playbackReporting ? (
+            <div className="space-y-1 rounded-lg border p-2">
+              <SwitchRow
+                id="stremio-scrobbling"
+                label="Stremio SDK"
+                hint="Plays, pauses and watched marks Stremio sends to the addon. Each user installs their own link, listed in Configuration."
+                status={stremioOn && stremioLabel === 'reinstall'
+                  ? <span className="rounded-full border border-amber-500/40 px-1.5 text-[11px] text-amber-400">Reinstall required</span>
+                  : stremioOn && stremioLabel === 'waiting'
+                    ? <span className="rounded-full border px-1.5 text-[11px] text-muted-foreground">No playback yet</span>
+                    : stremioOn && stremioLabel === 'ok'
+                      ? <span className="rounded-full border border-emerald-500/40 px-1.5 text-[11px] text-emerald-400">Receiving</span>
+                      : null}
+                checked={stremioOn}
+                onChange={(on) => setConfig(prev => ({ ...prev, stremioScrobbling: on, ...(on ? { stremioScrobblingSince: Date.now() } : {}) }))}
+              />
+              {stremioOn ? (
+                <SwitchRow
+                  nested
+                  id="stremio-library-watchlist"
+                  label="Sync Stremio library with watchlists"
+                  hint="Adding a title to your Stremio library adds it to your watchlists; removing it removes it."
+                  checked={config.stremioLibraryWatchlist === true}
+                  onChange={(on) => setConfig(prev => ({ ...prev, stremioLibraryWatchlist: on }))}
+                />
+              ) : null}
+              <SwitchRow
+                id="jellyfin-scrobbling"
+                label="Jellyfin"
+                hint="This addon's Jellyfin server and AIOStreams' Jellyfin server. A favourite goes to your watchlist, and disliking a show marks it dropped."
+                checked={jellyfinOn}
+                onChange={(on) => setConfig(prev => ({ ...prev, jellyfinScrobbling: on }))}
+              />
+              {!stremioOn && !jellyfinOn ? (
+                <p className="px-2 text-xs text-amber-400">Both are off, so nothing will be recorded.</p>
+              ) : (
+                <p className="px-2 text-xs text-muted-foreground">A client that reports neither way records nothing.</p>
+              )}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card id="wt-services" className="scroll-mt-16">
+        <CardHeader>
+          <CardTitle>Services</CardTitle>
+          <CardDescription>Where your plays are recorded. A user with accounts of their own uses those instead.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="mb-4 space-y-2 rounded-lg border p-3">
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-              <div className="min-w-[12rem] flex-1">
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="playback-detection" className="font-medium">When to record</Label>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Applies to every service below.
-                </p>
-              </div>
-              <Select
-                value={config.playbackReporting ? 'reported' : 'opened'}
-                onValueChange={(v) => setConfig(prev => ({ ...prev, playbackReporting: v === 'reported' }))}
-              >
-                <SelectTrigger id="playback-detection" className="w-full sm:w-[260px] shrink-0">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="opened">
-                    <span className="flex items-center gap-2">
-                      When a title is opened
-                      <Badge variant="secondary" className="text-[10px]">Any client</Badge>
-                    </span>
-                  </SelectItem>
-                  <SelectItem value="reported">
-                    <span className="flex items-center gap-2">
-                      When playback starts and stops
-                      <Badge variant="secondary" className="text-[10px]">Stremio, Jellyfin</Badge>
-                    </span>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {config.playbackReporting ? (
-              <>
-                <p className="text-xs text-muted-foreground">
-                  Recorded from what the client reports: something you abandon after a few minutes is kept as a resume point rather than being marked watched. <span className="text-amber-400">A client that reports neither way below records nothing.</span>
-                </p>
-                <div className="space-y-1 pt-1">
-                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-lg p-2 hover:bg-accent/50 transition-colors">
-                    <div className="min-w-[12rem] flex-1">
-                      <Label htmlFor="stremio-scrobbling" className="font-medium">Stremio SDK</Label>
-                      <p className="text-xs text-muted-foreground">Plays, pauses and watched marks Stremio sends to the addon.</p>
-                      {stremioOn && stremioLabel === 'reinstall' ? (
-                        <p className="text-xs text-amber-400">Reinstall required</p>
-                      ) : stremioOn && stremioLabel === 'waiting' ? (
-                        <p className="text-xs text-muted-foreground">No playback from Stremio yet</p>
-                      ) : null}
+          <div className="grid grid-cols-1 gap-1 md:grid-cols-2">
+            {WATCH_TRACKING_SERVICES.map((service) => {
+              const definition = WATCH_TRACKING_SERVICE_DEFINITIONS[service];
+              const connected = definition.hasCredential(config);
+              const switchId = `${service}-watch-tracking`;
+              return (
+                <div key={service} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg p-3 transition-colors hover:bg-accent/50">
+                  <div className="min-w-[12rem] flex-1 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Label htmlFor={switchId} className="font-medium">{definition.label}</Label>
+                      {connected ? (
+                        <span className="flex items-center gap-1 text-[11px] text-emerald-400"><CheckCircle2 className="h-3 w-3" /> Connected</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                          title={definition.connectHint}
+                          onClick={() => navigateToSettingsSection(definition.connectSection)}
+                        >
+                          <CircleDashed className="h-3 w-3" /> Not connected · <span className="underline underline-offset-2">Connect</span>
+                        </button>
+                      )}
                     </div>
-                    <Switch
-                      id="stremio-scrobbling"
-                      checked={stremioOn}
-                      onCheckedChange={(on) => setConfig(prev => ({ ...prev, stremioScrobbling: on, ...(on ? { stremioScrobblingSince: Date.now() } : {}) }))}
-                    />
+                    <div className="flex flex-wrap gap-1">
+                      {(['movie', 'series'] as const).map((mediaType) => {
+                        const on = isWatchTrackingMediaTypeSelected(config, service, mediaType);
+                        return (
+                          <span key={mediaType} className={cn('rounded-full border px-1.5 text-[11px]', on ? 'text-foreground' : 'text-muted-foreground line-through opacity-60')}>
+                            {mediaType === 'movie' ? definition.movieLabel : definition.seriesLabel}
+                          </span>
+                        );
+                      })}
+                    </div>
                   </div>
-                  {stremioOn ? (
-                    <div className="ml-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-r-lg border-l border-border p-2 pl-4 hover:bg-accent/50 transition-colors">
-                      <div className="min-w-[12rem] flex-1">
-                        <Label htmlFor="stremio-library-watchlist" className="font-medium">Sync Stremio library with watchlists</Label>
-                        <p className="text-xs text-muted-foreground">Adding a title to your Stremio library adds it to your watchlists; removing it removes it.</p>
-                      </div>
-                      <Switch
-                        id="stremio-library-watchlist"
-                        checked={config.stremioLibraryWatchlist === true}
-                        onCheckedChange={(on) => setConfig(prev => ({ ...prev, stremioLibraryWatchlist: on }))}
-                      />
-                    </div>
-                  ) : null}
-                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-lg p-2 hover:bg-accent/50 transition-colors">
-                    <div className="min-w-[12rem] flex-1">
-                      <Label htmlFor="jellyfin-scrobbling" className="font-medium">Jellyfin</Label>
-                      <p className="text-xs text-muted-foreground">This addon's Jellyfin server and AIOStreams' Jellyfin server. A favourite goes to your watchlist, and disliking a show marks it dropped.</p>
-                    </div>
-                    <Switch
-                      id="jellyfin-scrobbling"
-                      checked={scrobblesJellyfin(config)}
-                      onCheckedChange={(on) => setConfig(prev => ({ ...prev, jellyfinScrobbling: on }))}
-                    />
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9"
+                      aria-label={`Configure ${definition.label} watch tracking types`}
+                      title="Configure media types"
+                      onClick={() => setWatchTrackingService(service)}
+                    >
+                      <Settings2 className="h-4 w-4 text-muted-foreground" />
+                    </Button>
+                    <Switch id={switchId} checked={config[definition.masterKey] === true} onCheckedChange={(on) => setMaster(service, on)} />
                   </div>
-                  {!stremioOn && !scrobblesJellyfin(config) ? (
-                    <p className="px-2 text-xs text-muted-foreground">Nothing will be recorded.</p>
-                  ) : null}
                 </div>
-              </>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Recorded as soon as you open a title, which is the only signal most clients give. Simple and works everywhere, but anything you open counts as watched even if you stop a minute in.
-              </p>
-            )}
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="min-w-[12rem] flex-1">
-                <Label htmlFor="simkl-watch-tracking" className="font-medium">Simkl</Label>
-                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'simkl')}</p>
-              </div>
-              {renderWatchTrackingControls('simkl', 'simkl-watch-tracking', !!config.simklWatchTracking, handleSimklTrackingChange)}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="min-w-[12rem] flex-1">
-                <Label htmlFor="anilist-watch-tracking" className="font-medium">AniList</Label>
-                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'anilist')}</p>
-              </div>
-              {renderWatchTrackingControls('anilist', 'anilist-watch-tracking', !!config.anilistWatchTracking, handleAniListTrackingChange)}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="min-w-[12rem] flex-1">
-                <Label htmlFor="mal-watch-tracking" className="font-medium">MyAnimeList</Label>
-                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'mal')}</p>
-              </div>
-              {renderWatchTrackingControls('mal', 'mal-watch-tracking', !!config.malWatchTracking, handleMalTrackingChange)}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="min-w-[12rem] flex-1">
-                <Label htmlFor="mdblist-watch-tracking" className="font-medium">MDBList</Label>
-                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'mdblist')}</p>
-              </div>
-              {renderWatchTrackingControls('mdblist', 'mdblist-watch-tracking', !!config.mdblistWatchTracking, handleMDBListTrackingChange)}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="min-w-[12rem] flex-1">
-                <Label htmlFor="publicmetadb-watch-tracking" className="font-medium">PublicMetaDB</Label>
-                <p className="text-sm text-muted-foreground">{getWatchTrackingMediaTypeSummary(config, 'publicmetadb')}</p>
-              </div>
-              {renderWatchTrackingControls('publicmetadb', 'publicmetadb-watch-tracking', !!config.publicmetadbWatchTracking, handlePublicMetaDBTrackingChange)}
-            </div>
+              );
+            })}
           </div>
         </CardContent>
       </Card>
@@ -274,12 +286,13 @@ export function WatchTrackingSettings() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Card id="household-users">
+      <Card id="household-users" className="scroll-mt-16">
         <CardHeader>
           <CardTitle>Users</CardTitle>
-          <CardDescription>
-            Everyone watching on this configuration. Your own card comes first. Each user gets their own install link for Stremio under Configuration, and appears on the sign-in screen of this addon's Jellyfin server. A user is made of the tags picked for it: it sees the catalogs carrying any of them, under their rating limit. Someone else gets their own watch history and Continue Watching; a user that is you shares yours. Tags themselves are made in Catalogs.
-          </CardDescription>
+          <MoreText
+            className="text-sm"
+            text="Everyone watching on this configuration, your own card first. Each user gets their own install link for Stremio under Configuration, and appears on the sign-in screen of this addon's Jellyfin server. A user is made of the tags picked for it: it sees the catalogs carrying any of them, under their rating limit. Someone else gets their own watch history and Continue Watching; a user that is you shares yours. Tags themselves are made in Catalogs."
+          />
         </CardHeader>
         <CardContent>
           <HouseholdUsers />

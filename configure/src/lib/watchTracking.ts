@@ -86,6 +86,16 @@ export function scrobblesStremio(config: AppConfig): boolean {
   return config.playbackReporting === true && config.stremioScrobbling === true;
 }
 
+export function anyServiceConnected(config: AppConfig): boolean {
+  return WATCH_TRACKING_SERVICES.some((service) => WATCH_TRACKING_SERVICE_DEFINITIONS[service].hasCredential(config));
+}
+
+/** The first sentence of a help text, shown up front, and the rest behind "More". */
+export function splitFirstSentence(text: string): [string, string] {
+  const match = /^(.*?[.!?])\s+(?=[A-Z])/.exec(text);
+  return match ? [match[1], text.slice(match[0].length)] : [text, ''];
+}
+
 /** Mirrors the manifest: the Stremio events are declared with the switch alone. */
 export function declaresStremioEvents(config: AppConfig): boolean {
   return scrobblesStremio(config);

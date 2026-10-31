@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronUp, Loader2, Plus, User, X } from 'lucide-react';
+import { ArrowRight, ChevronDown, ChevronUp, Loader2, MoreHorizontal, Plus, User } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useSave } from '@/contexts/SaveContext';
@@ -22,9 +22,14 @@ import { cn } from '@/lib/utils';
 import { TagChip } from '@/components/TagChip';
 import { MAX_TAG_NAME_LENGTH, type CatalogConfig, type JellyfinUser, type SkipProvider, type SkipSource, type TagDef } from '@/contexts/config';
 import { UserAccounts } from '@/components/jellyfin/UserAccounts';
-import { CARD_SERVICES, connectedServices, handoffNameClash, isHolder, pinInvalid, showsAlsoKnownAs, trackerOptionsFor, watchlistOptionsFor } from '@/lib/cardAccounts';
+import { CARD_SERVICES, connectedServices, handoffNameClash, isHolder, pinInvalid, showsAlsoKnownAs, trackerOptionsFor, userBadge, watchlistOptionsFor, type UserBadge } from '@/lib/cardAccounts';
 import { disconnectCardAccount } from '@/lib/integrationCredentials';
 import { useJellyfinServer } from '@/hooks/useJellyfinServer';
+import { useStremioLinkStatus } from '@/hooks/useStremioLinkStatus';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { MoreText } from '@/components/settings/MoreText';
+import { navigateToSettingsSection } from '@/lib/settingsRoute';
+import { scrobblesStremio, stremioLinkState, WATCH_TRACKING_SERVICE_DEFINITIONS, WATCH_TRACKING_SERVICES, type StremioLinkState } from '@/lib/watchTracking';
 
 const IMAGE_URL = /^https?:\/\//i;
 
@@ -129,11 +134,30 @@ interface UserRowProps {
   /** Shows the Jellyfin-only settings, on an instance that runs the Jellyfin server. */
   jellyfin?: boolean;
   watchedPoint?: WatchedPoint;
+  open: boolean;
+  onToggle: () => void;
+  /** The tracking accounts this user writes to, named on the closed card. */
+  accounts: string[];
+  /** The state of this user's Stremio link, while Stremio SDK scrobbling is on. */
+  stremioState: StremioLinkState | null;
   onChange: (patch: Partial<JellyfinUser>) => void;
   onRemove?: () => void;
   onForget?: () => void;
   children?: ReactNode;
 }
+
+const BADGE_STYLES: Record<UserBadge, string> = {
+  'You': 'border-primary/40 bg-primary/15 text-primary',
+  'Same person': 'border-sky-500/40 text-sky-400',
+  'Own accounts': 'border-emerald-500/40 text-emerald-400',
+  'Someone else': 'border-muted-foreground/30 text-muted-foreground',
+};
+
+const STREMIO_STATES: Record<StremioLinkState, { label: string; style: string }> = {
+  reinstall: { label: 'Stremio: reinstall', style: 'border-amber-500/40 text-amber-400' },
+  waiting: { label: 'Stremio: no playback yet', style: 'text-muted-foreground' },
+  ok: { label: 'Stremio: receiving', style: 'border-emerald-500/40 text-emerald-400' },
+};
 
 interface WatchedPoint {
   value: number | null | undefined;
@@ -211,7 +235,7 @@ function CardSection({ title, children }: { title: string; children: ReactNode }
   );
 }
 
-function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptions, watchlistOptions, hasPmdb, mainSkipSource, showHandoff, jellyfin, watchedPoint, onChange, onRemove, onForget, children }: UserRowProps) {
+function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptions, watchlistOptions, hasPmdb, mainSkipSource, showHandoff, jellyfin, watchedPoint, open, onToggle, accounts, stremioState, onChange, onRemove, onForget, children }: UserRowProps) {
   const chosen = user?.tags ?? [];
   const toggleTag = (tag: string) =>
     onChange({ tags: chosen.includes(tag) ? chosen.filter((t) => t !== tag) : [...chosen, tag] });
@@ -232,9 +256,46 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
   const trackerValue = holder && rawTrackerSource && !trackerKnown ? 'auto' : rawTrackerSource ?? (main || holder ? 'auto' : 'inherit');
   const trackerCaption = trackerValue === 'inherit' ? 'Same as you: follows the choice on your own card.' : resumeSourceCaption(trackerValue, trackerOptions);
 
+  const badge = userBadge(user, Boolean(main));
+  const canForget = Boolean(onForget) && (main || !samePerson);
+
   return (
-    <div className="space-y-3 rounded-lg border p-4">
-      <div className="flex items-start gap-3">
+    <div id={`user-card-${user?.id || 'main'}`} className={cn('scroll-mt-16 rounded-lg border', open ? 'space-y-3 p-4' : 'px-3 py-2')}>
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={onToggle} aria-expanded={open} className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-left">
+          <Avatar src={avatar} small />
+          <span className="truncate text-sm font-medium">{name || 'Unnamed user'}</span>
+          <span className={cn('rounded-full border px-2 py-0.5 text-[11px] font-medium', BADGE_STYLES[badge])}>{badge}</span>
+          {accounts.length ? <span className="text-[11px] text-muted-foreground">{accounts.join(' · ')}</span> : null}
+          <span className="text-[11px] text-muted-foreground">{chosen.length ? scope : 'All catalogs'}</span>
+          {stremioState ? <span className={cn('rounded-full border px-1.5 text-[11px]', STREMIO_STATES[stremioState].style)}>{STREMIO_STATES[stremioState].label}</span> : null}
+        </button>
+        {stremioState ? (
+          <Button variant="ghost" size="sm" className="hidden h-7 gap-1 text-xs sm:inline-flex" onClick={() => navigateToSettingsSection('configuration')}>
+            Install link <ArrowRight className="h-3 w-3" />
+          </Button>
+        ) : null}
+        {canForget || onRemove ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground" aria-label={`More for ${name}`}>
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {canForget ? <DropdownMenuItem onSelect={() => onForget?.()}>Forget imported history</DropdownMenuItem> : null}
+              {canForget && onRemove ? <DropdownMenuSeparator /> : null}
+              {onRemove ? <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => onRemove()}>Remove {name || 'this user'}</DropdownMenuItem> : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground" aria-label={open ? `Close ${name}` : `Open ${name}`} onClick={onToggle}>
+          {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </Button>
+      </div>
+      {open ? (
+      <>
+      <div className="flex items-start gap-3 border-t pt-3">
         <Avatar src={avatar} onClick={() => setPictureOpen((v) => !v)} title={`Picture of ${name}`} />
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -253,11 +314,6 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
                 Same person as you
               </label>
             )}
-            {onRemove ? (
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground" aria-label={`Remove ${name}`} onClick={onRemove}>
-                <X className="h-4 w-4" />
-              </Button>
-            ) : null}
           </div>
           {pictureOpen || (avatar && !IMAGE_URL.test(avatar)) ? (
             <Input
@@ -269,9 +325,7 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
               onChange={(e) => onChange({ avatar: e.target.value || undefined })}
             />
           ) : (
-            <p className="text-[11px] text-muted-foreground">
-              {main ? 'Your Continue Watching, watched marks and trackers.' : samePerson ? 'You on these catalogs: shares your Continue Watching and watched marks, and writes your trackers; the picks below can still differ from your own card.' : holder ? 'Someone else, on their own accounts: their own Continue Watching, watched marks and watchlist, read from and written to the trackers connected below.' : 'Someone else: their own Continue Watching, watched marks and watchlist. Nothing they do reaches your trackers.'} Click the picture to change it.
-            </p>
+            <MoreText text={`${main ? 'Your Continue Watching, watched marks and trackers.' : samePerson ? 'You on these catalogs: shares your Continue Watching and watched marks, and writes your trackers; the picks below can still differ from your own card.' : holder ? 'Someone else, on their own accounts: their own Continue Watching, watched marks and watchlist, read from and written to the trackers connected below.' : 'Someone else: their own Continue Watching, watched marks and watchlist. Nothing they do reaches your trackers.'} Click the picture to change it.`} />
           )}
         </div>
       </div>
@@ -289,35 +343,22 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
                 <SelectItem value="off">This server only</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-[11px] text-muted-foreground">{trackerCaption}</p>
-            {onForget && (main || !samePerson) && (
-              <div className="space-y-1.5">
-                <p className="text-[11px] text-muted-foreground">
-                  The tracker read here is also imported into this server, history and resume points alike, and what is imported stays when the choice changes, even to This server only.
-                </p>
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onForget}>
-                  Forget imported history
-                </Button>
-              </div>
+            <MoreText text={trackerCaption} />
+            {canForget && (
+              <MoreText text="The tracker read here is also imported into this server, history and resume points alike. What is imported stays when the choice changes, even to This server only; Forget imported history in the … menu clears it." />
             )}
             {main && (
-              <p className="text-[11px] text-muted-foreground">
-                Whatever is picked, what is played through this server is remembered here and always wins over a tracker's view of the same title. Only services that store a playback position are offered, so AniList and MyAnimeList are not.
-              </p>
+              <MoreText text="Whatever is picked, what is played through this server is remembered here and always wins over a tracker's view of the same title. Only services that store a playback position are offered, so AniList and MyAnimeList are not." />
             )}
             {main && trackerOptions.length === 0 && (
-              <p className="text-[11px] text-muted-foreground">
-                No connected service stores playback positions, so only what is played through this server is shown. That is enough for a single client.
-              </p>
+              <MoreText text="No connected service stores playback positions, so only what is played through this server is shown. That is enough for a single client." />
             )}
           </div>
           {watchlistOptions.length > 0 && (
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">Watchlist</Label>
               <WatchlistPicker value={user?.watchlistServices} options={watchlistOptions} onChange={(next) => onChange({ watchlistServices: next })} inheritLabel={main || holder ? 'Every connected' : 'Same as you'} />
-              <p className="text-[11px] text-muted-foreground">
-                A client's favourites are the watchlist: the picked shelves merged, and a heart on a title in a client writes to the shelves that take it. This server keeps the hearts set here as a list of its own, alone or alongside the picked shelves. MDBList and Trakt file anime under movies and series; Simkl, AniList and MyAnimeList keep an anime shelf.
-              </p>
+              <MoreText text="A client's favourites are the watchlist: the picked shelves merged, and a heart on a title in a client writes to the shelves that take it. This server keeps the hearts set here as a list of its own, alone or alongside the picked shelves. MDBList and Trakt file anime under movies and series; Simkl, AniList and MyAnimeList keep an anime shelf." />
             </div>
           )}
           {watchedPoint ? <WatchedPointPicker name={name} point={watchedPoint} /> : null}
@@ -392,6 +433,8 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
             </div>
           ) : null}
         </div>
+      ) : null}
+      </>
       ) : null}
     </div>
   );
@@ -575,6 +618,23 @@ export function HouseholdUsers() {
     return candidates.filter((c) => c.ready);
   }, [config.apiKeys, config.mdblistWatchTracking, config.simklWatchTracking, config.publicmetadbWatchTracking, config.anilistWatchTracking, config.malWatchTracking]);
 
+  // One card open at a time keeps the list short; a lone user is open from the start.
+  const [openCard, setOpenCard] = useState<string | null>(() => ((config.jellyfinUsers ?? []).length === 0 ? 'main' : null));
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  useEffect(() => {
+    if (!scrollTo) return;
+    document.getElementById(`user-card-${scrollTo}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setScrollTo(null);
+  }, [scrollTo]);
+  const toggleCard = (key: string) => setOpenCard((current) => (current === key ? null : key));
+
+  const stremioStatus = useStremioLinkStatus(scrobblesStremio(config));
+  const stremioStateFor = (key: string): StremioLinkState | null =>
+    scrobblesStremio(config) ? stremioLinkState(config.stremioScrobblingSince, stremioStatus?.[key]) : null;
+  const mainAccounts = WATCH_TRACKING_SERVICES
+    .filter((service) => WATCH_TRACKING_SERVICE_DEFINITIONS[service].hasCredential(config))
+    .map((service) => WATCH_TRACKING_SERVICE_DEFINITIONS[service].label);
+
   const catalogCountFor = (chosen: string[]) => {
     const wanted = new Set(chosen.map((t) => t.toLowerCase()));
     return (config.catalogs ?? []).filter((c) => c.enabled && (c.tags ?? []).some((t) => wanted.has(t.toLowerCase()))).length;
@@ -670,6 +730,8 @@ export function HouseholdUsers() {
     const id = newUserId();
     setConfig(prev => ({ ...prev, jellyfinUsers: [...(prev.jellyfinUsers ?? []), { id, name: clean, tags: [] }] }));
     setNewUserName('');
+    setOpenCard(id);
+    setScrollTo(id);
   };
 
   const [forgetFor, setForgetFor] = useState<{ profile: string | null; name: string } | null>(null);
@@ -719,6 +781,21 @@ export function HouseholdUsers() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <div className="flex items-center gap-2">
+        <Input
+          value={newUserName}
+          maxLength={MAX_TAG_NAME_LENGTH}
+          placeholder="New user name"
+          className="h-8 text-sm"
+          aria-label="New user name"
+          onChange={(e) => setNewUserName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') addUser(); }}
+        />
+        <Button size="sm" className="shrink-0 whitespace-nowrap" onClick={addUser} disabled={!newUserName.trim()}>
+          <Plus className="mr-1 h-4 w-4" /> Add user
+        </Button>
+      </div>
+      {nameClash ? <p className="text-xs text-destructive">"{nameClash}" is used by two users. Each name, including Also known as names and user ids, must belong to one user.</p> : null}
       <UserRow
         main
         name={mainName}
@@ -742,6 +819,10 @@ export function HouseholdUsers() {
         showHandoff={showHandoff}
         jellyfin={jellyfin.enabled}
         watchedPoint={watchedPointFor('', mainName)}
+        open={openCard === 'main'}
+        onToggle={() => toggleCard('main')}
+        accounts={mainAccounts}
+        stremioState={stremioStateFor('')}
         onForget={canForget ? () => setForgetFor({ profile: null, name: mainName }) : undefined}
         onChange={(patch) => setConfig(prev => ({
           ...prev,
@@ -772,6 +853,10 @@ export function HouseholdUsers() {
             showHandoff={showHandoff}
             jellyfin={jellyfin.enabled}
             watchedPoint={watchedPointFor(user.id, user.name)}
+            open={openCard === user.id}
+            onToggle={() => toggleCard(user.id)}
+            accounts={holder ? connectedServices(user).map((service) => CARD_SERVICES[service].label) : []}
+            stremioState={stremioStateFor(user.id)}
             onChange={(patch) => updateUser(user.id, patch)}
             onRemove={() => { void removeUser(user); }}
             onForget={canForget ? () => setForgetFor({ profile: user.id, name: user.name }) : undefined}
@@ -782,21 +867,6 @@ export function HouseholdUsers() {
           </UserRow>
         );
       })}
-      {nameClash ? <p className="text-xs text-destructive">"{nameClash}" is used by two users. Each name, including Also known as names and user ids, must belong to one user.</p> : null}
-      <div className="flex items-center gap-2">
-        <Input
-          value={newUserName}
-          maxLength={MAX_TAG_NAME_LENGTH}
-          placeholder="New user name"
-          className="h-8 text-sm"
-          aria-label="New user name"
-          onChange={(e) => setNewUserName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') addUser(); }}
-        />
-        <Button size="sm" variant="outline" className="shrink-0 whitespace-nowrap" onClick={addUser} disabled={!newUserName.trim()}>
-          <Plus className="mr-1 h-4 w-4" /> Add user
-        </Button>
-      </div>
     </div>
   );
 }

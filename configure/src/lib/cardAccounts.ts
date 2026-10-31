@@ -145,6 +145,14 @@ export function householdIssue(
   return null;
 }
 
+export type UserBadge = 'You' | 'Same person' | 'Own accounts' | 'Someone else';
+
+export function userBadge(user: JellyfinUser | undefined, main: boolean): UserBadge {
+  if (main) return 'You';
+  if (user?.trackers === true) return 'Same person';
+  return isHolder(user) ? 'Own accounts' : 'Someone else';
+}
+
 /** Names already count for every user card, and for the main user wherever playback reporting was on before. */
 export function showsAlsoKnownAs(config: { playbackReporting?: boolean; jellyfinUserHandoffNames?: string[] }, users: JellyfinUser[]): boolean {
   return users.length > 0 || config.playbackReporting === true || Boolean(config.jellyfinUserHandoffNames?.length);
