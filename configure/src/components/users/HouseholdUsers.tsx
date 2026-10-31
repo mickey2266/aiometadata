@@ -64,11 +64,11 @@ function HandoffNamesInput({ names, onChange }: { names?: string[]; onChange: (n
     onChange(next.length ? next : undefined);
   };
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Label className="text-xs text-muted-foreground">Also known as (AIOStreams and other apps)</Label>
+    <div>
       <Input
-        className="h-8 min-w-[12rem] flex-1 text-xs"
-        placeholder="Names this user has in other apps, comma separated"
+        className="h-8 w-full text-xs"
+        aria-label="Also known as"
+        placeholder="For example: Mom, mum-aio"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
@@ -86,7 +86,6 @@ function PinField({ name, pin, main, onChange }: { name: string; pin?: string; m
   const invalid = pinInvalid(pin);
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs font-medium">PIN</Label>
       {saved && !editing ? (
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">PIN set</span>
@@ -107,13 +106,11 @@ function PinField({ name, pin, main, onChange }: { name: string; pin?: string; m
           onChange={(e) => onChange(e.target.value.replace(/\D/g, '') || undefined)}
         />
       )}
-      <p className={cn('text-[11px]', invalid ? 'text-destructive' : 'text-muted-foreground')}>
-        {invalid
-          ? 'A PIN is 4 to 12 digits.'
-          : main
-            ? 'Asked whenever another user switches to you. To sign in as you on a client, enter the password, a slash and the PIN, like password/1234. Setting or changing it signs you out on every device.'
-            : 'Asked whenever someone switches to this user, from your own user too. To sign in as them on a client, enter the password, a slash and the PIN, like password/1234. Setting or changing it signs this user out on every device.'}
-      </p>
+      {invalid ? (
+        <p className="text-[11px] text-destructive">A PIN is 4 to 12 digits.</p>
+      ) : (
+        <MoreText text={`To sign in as ${main ? 'you' : 'them'} on a client, enter the password, a slash and the PIN, like password/1234. Setting or changing it signs ${main ? 'you' : 'this user'} out on every device.`} />
+      )}
     </div>
   );
 }
@@ -185,12 +182,9 @@ function WatchedPointPicker({ name, point }: { name: string; point: WatchedPoint
 
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={`watched-${name}`} className="text-xs font-medium">Watched at</Label>
-        <span className="text-xs tabular-nums text-muted-foreground">
-          <span className="font-medium text-foreground">{shown}%</span>
-          {following ? ' (server default)' : null}
-        </span>
+      <div className="text-right text-xs tabular-nums text-muted-foreground">
+        <span className="font-medium text-foreground">{shown}%</span>
+        {following ? ' (server default)' : null}
       </div>
       <input
         id={`watched-${name}`}
@@ -217,13 +211,30 @@ function WatchedPointPicker({ name, point }: { name: string; point: WatchedPoint
         ) : null}
         <span>100%</span>
       </div>
-      <p className="text-[11px] text-muted-foreground">
-        {saved
-          ? 'Played this far, a title counts as watched; stopping earlier keeps it in Continue Watching. Simkl gets the same point. Saves on its own.'
-          : 'Save the configuration first, then set when a title counts as watched for this user.'}
-      </p>
+      {saved ? null : <p className="text-[11px] text-muted-foreground">Save the configuration first, then set when a title counts as watched for this user.</p>}
     </div>
   );
+}
+
+/** One setting: its name and a line on what it does on the left, the control on the right, details below. */
+function SettingRow({ label, description, control, children }: { label: string; description?: string; control?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="space-y-2 py-3 first:pt-1 last:pb-1">
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
+        <div className="min-w-[12rem] flex-1 space-y-0.5">
+          <p className="text-sm font-medium">{label}</p>
+          {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+        </div>
+        {control ? <div className="w-full shrink-0 sm:w-64">{control}</div> : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** The longer notes under a setting, kept apart from the control. */
+function SettingNotes({ children }: { children: ReactNode }) {
+  return <div className="space-y-1 rounded-md bg-muted/30 px-3 py-2">{children}</div>;
 }
 
 function CardSection({ title, children }: { title: string; children: ReactNode }) {
@@ -331,44 +342,65 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
       </div>
 
       <CardSection title="Tracking">
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium">{main ? 'Your trackers' : holder ? 'Their trackers' : 'Trackers this user reads'}</Label>
-            <Select value={trackerValue} onValueChange={(v) => onChange({ trackerSource: v === 'inherit' ? undefined : (v as JellyfinUser['trackerSource']) })}>
-              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {!main && !holder && <SelectItem value="inherit">Same as you</SelectItem>}
-                <SelectItem value="auto">Automatic</SelectItem>
-                {trackerOptions.map((opt) => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
-                <SelectItem value="off">This server only</SelectItem>
-              </SelectContent>
-            </Select>
-            <MoreText text={trackerCaption} />
-            {canForget && (
-              <MoreText text="The tracker read here is also imported into this server, history and resume points alike. What is imported stays when the choice changes, even to This server only; Forget imported history in the … menu clears it." />
-            )}
-            {main && (
-              <MoreText text="Whatever is picked, what is played through this server is remembered here and always wins over a tracker's view of the same title. Only services that store a playback position are offered, so AniList and MyAnimeList are not." />
-            )}
-            {main && trackerOptions.length === 0 && (
-              <MoreText text="No connected service stores playback positions, so only what is played through this server is shown. That is enough for a single client." />
-            )}
-          </div>
+        <div className="divide-y">
+          <SettingRow
+            label={main ? 'Your trackers' : holder ? 'Their trackers' : 'Trackers this user reads'}
+            description="Where Continue Watching, Next Up and the watched ticks come from."
+            control={
+              <Select value={trackerValue} onValueChange={(v) => onChange({ trackerSource: v === 'inherit' ? undefined : (v as JellyfinUser['trackerSource']) })}>
+                <SelectTrigger className="h-8 text-xs" aria-label={`Trackers of ${name}`}><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {!main && !holder && <SelectItem value="inherit">Same as you</SelectItem>}
+                  <SelectItem value="auto">Automatic</SelectItem>
+                  {trackerOptions.map((opt) => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
+                  <SelectItem value="off">This server only</SelectItem>
+                </SelectContent>
+              </Select>
+            }
+          >
+            <SettingNotes>
+              <MoreText text={trackerCaption} />
+              {canForget && (
+                <MoreText text="The tracker read here is also imported into this server, history and resume points alike. What is imported stays when the choice changes, even to This server only; Forget imported history in the … menu clears it." />
+              )}
+              {main && (
+                <MoreText text="Whatever is picked, what is played through this server is remembered here and always wins over a tracker's view of the same title. Only services that store a playback position are offered, so AniList and MyAnimeList are not." />
+              )}
+              {main && trackerOptions.length === 0 && (
+                <MoreText text="No connected service stores playback positions, so only what is played through this server is shown. That is enough for a single client." />
+              )}
+            </SettingNotes>
+          </SettingRow>
           {watchlistOptions.length > 0 && (
-            <div className="space-y-1.5">
-              <Label className="text-xs font-medium">Watchlist</Label>
-              <WatchlistPicker value={user?.watchlistServices} options={watchlistOptions} onChange={(next) => onChange({ watchlistServices: next })} inheritLabel={main || holder ? 'Every connected' : 'Same as you'} />
-              <MoreText text="A client's favourites are the watchlist: the picked shelves merged, and a heart on a title in a client writes to the shelves that take it. This server keeps the hearts set here as a list of its own, alone or alongside the picked shelves. MDBList and Trakt file anime under movies and series; Simkl, AniList and MyAnimeList keep an anime shelf." />
-            </div>
+            <SettingRow label="Watchlist" description="The shelves a heart in a client reads from and writes to.">
+              <WatchlistPicker value={user?.watchlistServices} options={watchlistOptions} onChange={(next) => onChange({ watchlistServices: next })} inheritLabel={main || holder ? 'Every connected shelf' : 'Same as you'} />
+              <SettingNotes>
+                <MoreText text="A client's favourites are the watchlist: the picked shelves merged, and a heart on a title in a client writes to the shelves that take it. This server keeps the hearts set here as a list of its own, alone or alongside the picked shelves. MDBList and Trakt file anime under movies and series; Simkl, AniList and MyAnimeList keep an anime shelf." />
+              </SettingNotes>
+            </SettingRow>
           )}
-          {watchedPoint ? <WatchedPointPicker name={name} point={watchedPoint} /> : null}
+          {watchedPoint ? (
+            <SettingRow
+              label="Watched at"
+              description="Played this far, a title counts as watched; stopping earlier keeps it in Continue Watching. Simkl gets the same point. Saves on its own."
+              control={<WatchedPointPicker name={name} point={watchedPoint} />}
+            />
+          ) : null}
+          {showHandoff ? (
+            <SettingRow label="Also known as" description="Names AIOStreams and other apps use for this person, comma separated.">
+              <HandoffNamesInput names={user?.handoffNames} onChange={(handoffNames) => onChange({ handoffNames })} />
+            </SettingRow>
+          ) : null}
         </div>
-        {showHandoff ? <HandoffNamesInput names={user?.handoffNames} onChange={(handoffNames) => onChange({ handoffNames })} /> : null}
-        {children}
+        {children ? <div className="border-t pt-3">{children}</div> : null}
       </CardSection>
 
       {allTags.length > 0 ? (
-        <CardSection title="Catalogs this person sees">
+        <CardSection title="Catalogs">
+          <SettingRow
+            label="Tags"
+            description="This user sees the catalogs carrying any of the picked tags, under their rating limit. None picked shows every catalog."
+          >
           <div className="flex flex-wrap items-center gap-1.5">
             {allTags.map((t) => (
               <TagChip
@@ -386,6 +418,7 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
               {capNote}
             </span>
           </div>
+          </SettingRow>
         </CardSection>
       ) : null}
 
@@ -404,24 +437,28 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
             {jellyfinOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </button>
           {jellyfinOpen ? (
-            <div className="mt-3 grid gap-4 md:grid-cols-3">
+            <div className="mt-2 divide-y">
               {!main && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-medium">Stream addon</Label>
-                  <Input
-                    className="h-8 text-xs"
-                    placeholder="Same as you"
-                    value={user?.streamUrl ?? ''}
-                    onChange={(e) => onChange({ streamUrl: e.target.value.trim() ? e.target.value : undefined })}
-                  />
-                  <p className="text-[11px] text-muted-foreground">
-                    An address this user plays from instead of the one in the Jellyfin settings, so a user can be pointed at a different addon. Empty follows yours.
-                  </p>
-                </div>
+                <SettingRow
+                  label="Stream addon"
+                  description="An addon this user plays from instead of the one in the Jellyfin settings. Empty follows yours."
+                  control={
+                    <Input
+                      className="h-8 text-xs"
+                      placeholder="Same as you"
+                      aria-label={`Stream addon of ${name}`}
+                      value={user?.streamUrl ?? ''}
+                      onChange={(e) => onChange({ streamUrl: e.target.value.trim() ? e.target.value : undefined })}
+                    />
+                  }
+                />
               )}
-              <PinField name={name} pin={user?.pin} main={main} onChange={(pin) => onChange({ pin })} />
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Skip intro and credits</Label>
+              <SettingRow
+                label="PIN"
+                description={main ? 'Asked whenever another user switches to you.' : 'Asked whenever someone switches to this user.'}
+                control={<PinField name={name} pin={user?.pin} main={main} onChange={(pin) => onChange({ pin })} />}
+              />
+              <SettingRow label="Skip intro and credits" description="Where the skip markers a client shows come from, asked in this order.">
                 <SkipSourcePicker
                   value={user?.skipSource ?? (main ? 'auto' : undefined)}
                   inherited={mainSkipSource}
@@ -429,7 +466,7 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
                   hasPmdb={hasPmdb}
                   onChange={(skipSource) => onChange({ skipSource })}
                 />
-              </div>
+              </SettingRow>
             </div>
           ) : null}
         </div>
@@ -460,22 +497,44 @@ function WatchlistPicker({ value, options, onChange, inheritLabel }: { value?: s
     const next = withServer ? [WATCHLIST_SERVER, ...shelves] : shelves;
     onChange(next.length ? next : undefined);
   };
-  const toggle = (token: string) => save(server, picked.includes(token) ? picked.filter((t) => t !== token) : [...picked, token]);
+  const following = !server && picked.length === 0;
+  const every = options.flatMap((o) => o.shelves.map((s) => `${o.value}:${s}`));
+  // While following, every shelf shows as on, so a click turns that one off rather than narrowing to it.
+  const toggle = (token: string) => {
+    const base = following ? every : picked;
+    const next = base.includes(token) ? base.filter((t) => t !== token) : [...base, token];
+    if (!server && next.length === every.length) onChange(undefined);
+    else save(server, next);
+  };
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        <TagChip name={inheritLabel} onClick={() => onChange(undefined)} pressed={!server && picked.length === 0} dimmed={server || picked.length > 0} />
-        <TagChip name="This server" onClick={() => save(!server, picked)} pressed={server} dimmed={!server} />
+        <TagChip name={inheritLabel} onClick={() => onChange(undefined)} pressed={following} dimmed={!following} />
+        <TagChip name="Keep a list on this server" onClick={() => save(!server, picked)} pressed={server} dimmed={!server} />
       </div>
-      {options.map((opt) => (
-        <div key={opt.value} className="flex flex-wrap items-center gap-1.5">
-          <span className="w-24 shrink-0 text-xs text-muted-foreground">{opt.label}</span>
-          {opt.shelves.map((shelf) => {
-            const token = `${opt.value}:${shelf}`;
-            return <TagChip key={token} name={SHELF_LABELS[shelf]} onClick={() => toggle(token)} pressed={picked.includes(token)} dimmed={!picked.includes(token)} />;
-          })}
-        </div>
-      ))}
+      <div className="divide-y rounded-md border">
+        {options.map((opt) => (
+          <div key={opt.value} className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5">
+            <span className="text-xs">{opt.label}</span>
+            <div className="flex flex-wrap gap-1.5">
+              {opt.shelves.map((shelf) => {
+                const token = `${opt.value}:${shelf}`;
+                const on = following || picked.includes(token);
+                return <TagChip key={token} name={SHELF_LABELS[shelf]} onClick={() => toggle(token)} pressed={on} dimmed={!on} />;
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        {following
+          ? 'Every shelf of every connected service. Switch a shelf off to leave it out.'
+          : server && !picked.length
+            ? 'Only the list kept on this server.'
+            : server
+              ? 'The shelves switched on above, plus the list kept on this server.'
+              : 'Only the shelves switched on above.'}
+      </p>
     </div>
   );
 }
