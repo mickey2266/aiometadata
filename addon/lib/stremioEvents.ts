@@ -25,7 +25,10 @@ export function parseStremioEvent(resource: string, type: string, id: string, ex
   if (!id) return null;
   const params = new URLSearchParams(extra || '');
   const action = params.get('action') ?? '';
-  const known: 'movie' | 'series' | null = type === 'movie' || type === 'series' ? type : null;
+  const known: 'movie' | 'series' | null =
+    type === 'movie' || type === 'anime.movie' ? 'movie'
+    : type === 'series' || type === 'anime.series' ? 'series'
+    : null;
 
   if (resource === 'player') {
     if (!PLAYER_ACTIONS.includes(action)) return null;
@@ -38,11 +41,8 @@ export function parseStremioEvent(resource: string, type: string, id: string, ex
   if (resource === 'library') {
     if (!LIBRARY_ACTIONS.includes(action)) return null;
     const videoIds = (params.get('videoId') ?? '').split(',').map((v) => v.trim()).filter(Boolean);
-    let resolved = known;
-    if (!resolved) {
-      if (videoIds.length) resolved = 'series';
-      else if (action === 'libraryAdd' || action === 'libraryRemove') resolved = hasEpisode(id) ? null : 'series';
-    }
+    // A meta id says nothing of its kind (tmdb:603 is a film and a show), so only videos make an unknown type a series.
+    const resolved = known ?? (videoIds.length ? 'series' : null);
     if (!resolved) return null;
     return { resource, type: resolved, metaId: id, action: action as LibraryAction, videoIds };
   }
