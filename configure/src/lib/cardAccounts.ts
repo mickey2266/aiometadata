@@ -125,6 +125,39 @@ export function missingWatchlistSlots(catalogs: Array<Pick<CatalogConfig, 'id'>>
   });
 }
 
+const PIN_PATTERN = /^\d{4,12}$/;
+const SAVED_PIN = /^\$2[aby]\$/;
+
+export function pinInvalid(pin?: string): boolean {
+  return Boolean(pin && !SAVED_PIN.test(pin) && !PIN_PATTERN.test(pin));
+}
+
+/** What stops the configuration being saved because of the people set up in it, or null. */
+export function householdIssue(
+  config: { jellyfinUserName?: string; addonName?: string; jellyfinUserHandoffNames?: string[]; jellyfinUserPin?: string; jellyfinUsers?: JellyfinUser[] },
+  userUUID: string,
+): string | null {
+  const users = config.jellyfinUsers ?? [];
+  const mainName = config.jellyfinUserName || config.addonName || userUUID.slice(0, 8);
+  const clash = handoffNameClash(mainName, config.jellyfinUserHandoffNames, users);
+  if (clash) return `"${clash}" is used by two users.`;
+  if (pinInvalid(config.jellyfinUserPin) || users.some((user) => pinInvalid(user.pin))) return 'A PIN must be 4 to 12 digits.';
+  return null;
+}
+
+export type UserBadge = 'You' | 'Same person' | 'Own accounts' | 'Someone else';
+
+export function userBadge(user: JellyfinUser | undefined, main: boolean): UserBadge {
+  if (main) return 'You';
+  if (user?.trackers === true) return 'Same person';
+  return isHolder(user) ? 'Own accounts' : 'Someone else';
+}
+
+/** Names already count for every user card, and for the main user wherever playback reporting was on before. */
+export function showsAlsoKnownAs(config: { playbackReporting?: boolean; jellyfinUserHandoffNames?: string[] }, users: JellyfinUser[]): boolean {
+  return users.length > 0 || config.playbackReporting === true || Boolean(config.jellyfinUserHandoffNames?.length);
+}
+
 export function handoffNameClash(mainName: string, mainHandoff: string[] | undefined, users: JellyfinUser[]): string | null {
   const owners = new Map<string, string>();
   const claim = (owner: string, names: Array<string | undefined>): string | null => {
@@ -137,6 +170,7 @@ export function handoffNameClash(mainName: string, mainHandoff: string[] | undef
     }
     return null;
   };
+  for (const user of users) owners.set(user.id.trim().toLowerCase(), user.id);
   const first = claim('', [mainName, ...(mainHandoff ?? [])]);
   if (first) return first;
   for (const user of users) {

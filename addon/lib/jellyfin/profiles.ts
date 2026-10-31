@@ -243,8 +243,13 @@ export function viewerByName(config: any, userUUID: string, name: unknown): Prof
   const wanted = typeof name === 'string' ? name.trim().toLowerCase() : '';
   if (!wanted) return undefined;
   const matches = (candidate: string) => candidate.trim().toLowerCase() === wanted || personaIdOf(candidate) === wanted;
-  return listProfiles(config, userUUID).find((p) => matches(p.name) || p.handoffNames.some(matches));
+  const profiles = listProfiles(config, userUUID);
+  return profiles.find((p) => matches(p.name) || p.handoffNames.some(matches))
+    ?? profiles.find((p) => p.id !== null && p.id.toLowerCase() === wanted);
 }
+
+// A user card's install link names it by id; one that matches no card must not fall back to the installation.
+const CARD_ID = /^[0-9a-f]{12}$/i;
 
 export function hasNamedViewers(config: any, userUUID: string): boolean {
   const [main, ...others] = listProfiles(config, userUUID);
@@ -254,6 +259,7 @@ export function hasNamedViewers(config: any, userUUID: string): boolean {
 /** The user a handoff request names: null when it names nobody, undefined when it names nobody here while others could be named. */
 export function profileForViewer(config: any, userUUID: string, name: unknown): Profile | null | undefined {
   if (name === undefined || name === null || (typeof name === 'string' && !name.trim())) return null;
+  if (typeof name === 'string' && CARD_ID.test(name.trim())) return viewerByName(config, userUUID, name);
   if (!hasNamedViewers(config, userUUID)) return null;
   if (typeof name !== 'string') return undefined;
   return viewerByName(config, userUUID, name);

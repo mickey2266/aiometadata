@@ -87,7 +87,6 @@ export const SECTION_SKELETONS: Record<SettingsSectionId, SkeletonSpec> = {
           { descriptionLines: 2, control: 'switch-list', controlCount: 3 },
         ],
       },
-      { kind: 'card', card: { descriptionLines: 1, control: 'switch-list', controlCount: 6 } },
     ],
   },
 
@@ -200,6 +199,20 @@ export const SECTION_SKELETONS: Record<SettingsSectionId, SkeletonSpec> = {
   },
 
   // ConfigurationManager opens straight onto cards — it has no page h2.
+  'watch-tracking': {
+    className: 'space-y-8',
+    blocks: [
+      {
+        kind: 'heading',
+        title: 'Watch Tracking',
+        description: 'Choose how plays are recorded, which services hear about them, and who is watching.',
+      },
+      { kind: 'card', card: { descriptionLines: 2, control: 'switch-list', controlCount: 3 } },
+      { kind: 'card', card: { descriptionLines: 1, control: 'switch-list', controlCount: 5 } },
+      { kind: 'card', card: { descriptionLines: 2, control: 'text' } },
+    ],
+  },
+
   'configuration': {
     className: 'space-y-6',
     blocks: [

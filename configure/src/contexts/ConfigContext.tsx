@@ -4,7 +4,7 @@ import { AppConfig, CatalogConfig, SearchConfig } from "./config";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
 import { allCatalogDefinitions, allSearchProviders } from "@/data/catalogs";
 import { LoadingScreen } from "@/components/LoadingScreen"; 
-import { hasAnyWatchTrackingEnabled } from '@/lib/watchTracking';
+import { declaresStremioEvents, hasAnyWatchTrackingEnabled } from '@/lib/watchTracking';
 import { reconcileTagRegistry } from '@/lib/catalogShare';
 import { keepCollectionsInPlace } from '@shared/homeOrder';
 
@@ -265,6 +265,7 @@ function getManifestFingerprint(config: AppConfig): string {
   }));
 
   const subtitlesResource = hasAnyWatchTrackingEnabled(config);
+  const stremioEvents = declaresStremioEvents(config);
   const collectionCatalogs = !config.catalogModeOnly && config.collectionCatalogs !== false;
   const collections = collectionCatalogs
     ? (config.collections || [])
@@ -281,6 +282,7 @@ function getManifestFingerprint(config: AppConfig): string {
     collections,
     showRateMeButton: config.showRateMeButton,
     subtitlesResource,
+    stremioEvents,
     showPrefix: config.showPrefix,
     language: config.language,
     search: {

@@ -57,6 +57,10 @@ const ART_SCOPE_SKIPPED = new Set([
   'jellyfinUserPin',
   'jellyfinAppPassword',
   'playbackReporting',
+  'jellyfinScrobbling',
+  'stremioScrobbling',
+  'stremioLibraryWatchlist',
+  'stremioScrobblingSince',
 ]);
 const ART_SCOPE_SKIPPED_KEYS = new Set(['malTokenId', 'anilistTokenId', 'simklTokenId', 'traktTokenId', 'movieLensCredId', 'trakt', 'simkl']);
 const artSignatures = new WeakMap<object, string>();

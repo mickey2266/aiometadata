@@ -67,7 +67,7 @@ const {
   verifyTraktOAuthState,
 } = require('./lib/oauthState');
 const { renderOAuthPage, escapeHtml } = require('./lib/oauthPage');
-const { hasAnyWatchTrackingEnabled } = require('./lib/watchTracking');
+const { hasAnyWatchTrackingEnabled, scrobblesJellyfin } = require('./lib/watchTracking');
 const simklAuth = require('./lib/simkl');
 const { SimklClient } = simklAuth;
 const {
@@ -4897,7 +4897,10 @@ addon.get("/stremio/:userUUID/manifest.json", async function (req, res) {
                 res.setHeader('Access-Control-Allow-Headers', '*');
                 return res.status(500).send({ err: "Failed to build manifest." });
             }
-            
+        if (manifest.resources?.includes('player')) {
+            require('./lib/stremioEventStatus').noteManifest(userUUID, profile?.id ?? '');
+        }
+
         // Pass config to request object for ETag generation
         req.userConfig = config;
         
@@ -5915,7 +5918,7 @@ addon.post(["/stremio/:userUUID/watch_state/push/:type/:id.json", "/stremio/:use
     return res.status(404).json({ error: "User configuration not found" });
   }
 
-  if (!config.playbackReporting) {
+  if (!scrobblesJellyfin(config)) {
     consola.debug(`[Playback] Reporting is off for ${userUUID}, dropping ${type}/${id}`);
     return res.status(404).json({ error: "Playback reporting is not enabled" });
   }
@@ -5951,7 +5954,7 @@ addon.get("/stremio/:userUUID/watch_state/pull.json", async function (req, res) 
   } catch {
     config = null;
   }
-  if (!config || !config.playbackReporting) {
+  if (!config || !scrobblesJellyfin(config)) {
     return res.status(404).json({ error: "Watch state is not enabled" });
   }
 
@@ -5970,6 +5973,76 @@ addon.get("/stremio/:userUUID/watch_state/pull.json", async function (req, res) 
   } catch (error) {
     consola.error(`[Watch State] Failed to build the pull for ${userUUID}: ${error.message}`);
     return res.status(500).json({ error: "Failed to read watch state" });
+  }
+});
+
+// --- Stremio player and library events ---
+// Stremio does not wait for or read the answer, so it is given before the work.
+function stremioEventRoute(resource) {
+  return async function (req, res) {
+    const { userUUID, type, id, extra } = req.params;
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Cache-Control', 'no-store');
+
+    let config;
+    try {
+      config = await loadConfigFromDatabase(userUUID);
+    } catch {
+      config = null;
+    }
+    if (!config) return res.json({ success: false });
+
+    const { configForViewer, profileForViewer } = require('./lib/jellyfin/profiles');
+    const { scrobblesStremio, syncsStremioLibrary } = require('./lib/watchTracking');
+    const { parseStremioEvent, stremioEventTarget, stremioEventKey, stremioEventSlot, isRepeatEvent, runInOrder } = require('./lib/stremioEvents');
+    const viewer = configForViewer(config, userUUID, req.query.viewer);
+    if (!viewer) return refuseUnknownViewer(res, 'Stremio', userUUID, req.query.viewer);
+    const event = scrobblesStremio(viewer) ? parseStremioEvent(resource, type, id, extra) : null;
+    if (!event) return res.json({ success: false });
+    res.json({ success: true });
+
+    require('./lib/stremioEventStatus').noteEvent(userUUID, profileForViewer(config, userUUID, req.query.viewer)?.id ?? '');
+    const { viewerScope } = require('./lib/playbackHandler');
+    const scope = viewerScope(userUUID, viewer);
+    if (isRepeatEvent(scope, stremioEventTarget(event), stremioEventKey(event))) return;
+
+    const { runAsAccountOwner } = require('./lib/jellyfin/viewer');
+    const { accountOwner } = require('./lib/accounts');
+    runInOrder(`${scope}|${stremioEventSlot(event)}`, () => runAsAccountOwner(accountOwner(viewer), async () => {
+      const playstate = require('./lib/jellyfin/playstate');
+      if (event.resource === 'player') return playstate.recordStremioPlay(userUUID, viewer, event);
+      if (event.action === 'watched' || event.action === 'unwatched') return playstate.recordStremioMark(userUUID, viewer, event);
+      if (!syncsStremioLibrary(viewer)) return;
+      const { setWatchlisted } = require('./lib/jellyfin/watchlist');
+      const t = /^(kitsu|mal|anilist|anidb):/.test(event.metaId) ? 'anime' : event.type;
+      await setWatchlisted(userUUID, viewer, { k: event.type, t, i: event.metaId }, event.action === 'libraryAdd');
+    })).catch((error) => consola.error(`[Stremio] ${resource} ${type}/${id} failed: ${error.message}`));
+  };
+}
+addon.get("/stremio/:userUUID/player/:type/:id/:extra.json", stremioEventRoute('player'));
+addon.get("/stremio/:userUUID/library/:type/:id/:extra.json", stremioEventRoute('library'));
+
+// When each install link last fetched a manifest declaring the Stremio events, and last sent one.
+addon.post("/api/stremio/:userUUID/event-status", configLoadRateLimitMiddleware, async function (req, res) {
+  const userUUID = String(req.params.userUUID);
+  const password = req.body?.password;
+  try {
+    const accountId = req.session?.accountId;
+    const owns = Boolean(accountId) && (await database.ownsConfig(accountId, userUUID));
+    const verified = !owns && password ? await database.verifyUserAndGetConfig(userUUID, String(password)) : null;
+    if (!owns && !verified) {
+      return res.status(401).json({ error: 'Sign in or enter the configuration password to read the Stremio status' });
+    }
+    const config = verified ?? (await database.getUserConfig(userUUID).catch(() => null));
+    const { listProfiles } = require('./lib/jellyfin/profiles');
+    const { readStatus } = require('./lib/stremioEventStatus');
+    const links = await readStatus(userUUID, listProfiles(config, userUUID).map((profile) => profile.id ?? ''));
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ links });
+  } catch (error) {
+    consola.error(`[Stremio] Failed to read the event status for ${userUUID}: ${error.message}`);
+    return res.status(500).json({ error: "Failed to read the Stremio status" });
   }
 });
 

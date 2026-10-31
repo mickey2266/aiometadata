@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import {
   ChevronLeft, ChevronRight,
   Sparkles, SlidersHorizontal, KeyRound, Film, Paintbrush,
-  Filter, Search, LayoutGrid, Settings2,
+  Filter, Search, LayoutGrid, Eye, Settings2,
 } from "lucide-react";
 import { SectionSkeleton } from '@/components/settings/SectionSkeleton';
 import { SectionErrorBoundary } from '@/components/settings/SectionErrorBoundary';
@@ -38,6 +38,7 @@ const SECTION_IMPORTS: Record<SettingsSectionId, () => Promise<{ default: Compon
   'filters': () => import('./sections/FiltersSettings').then((m) => ({ default: m.FiltersSettings as ComponentType })),
   'search': () => import('./sections/SearchSettings').then((m) => ({ default: m.SearchSettings as ComponentType })),
   'catalogs': () => import('./sections/CatalogsSettings').then((m) => ({ default: m.CatalogsSettings as ComponentType })),
+  'watch-tracking': () => import('./sections/WatchTrackingSettings').then((m) => ({ default: m.WatchTrackingSettings as ComponentType })),
   'configuration': () => import('./ConfigurationManager').then((m) => ({ default: m.ConfigurationManager as ComponentType })),
 };
 
@@ -68,6 +69,7 @@ const SECTION_VIEWS: Record<SettingsSectionId, {
   'filters': { Component: lazy(SECTION_IMPORTS['filters']), icon: Filter },
   'search': { Component: lazy(SECTION_IMPORTS['search']), icon: Search },
   'catalogs': { Component: lazy(SECTION_IMPORTS['catalogs']), icon: LayoutGrid },
+  'watch-tracking': { Component: lazy(SECTION_IMPORTS['watch-tracking']), icon: Eye },
   'configuration': { Component: lazy(SECTION_IMPORTS['configuration']), icon: Settings2 },
 };
 
@@ -123,8 +125,8 @@ export function SettingsLayout() {
 
   useEffect(() => {
     const handleNavigate = (event: Event) => {
-      const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;
-      if (tab && isSettingsSectionId(tab)) navigate(tab);
+      const { tab, anchor } = (event as CustomEvent<{ tab?: string; anchor?: string }>).detail ?? {};
+      if (tab && isSettingsSectionId(tab)) navigate(tab, anchor ?? null);
     };
     window.addEventListener(SETTINGS_LAYOUT_NAVIGATE_EVENT, handleNavigate as EventListener);
     return () => window.removeEventListener(SETTINGS_LAYOUT_NAVIGATE_EVENT, handleNavigate as EventListener);

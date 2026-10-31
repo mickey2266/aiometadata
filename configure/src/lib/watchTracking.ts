@@ -1,5 +1,5 @@
 import type { AppConfig, WatchTrackingService } from '@/contexts/config';
-import type { SettingsSectionId } from '@/lib/settingsRoute';
+import { navigateToSettingsSection, requestIntegrationDialog, type IntegrationDialog, type SettingsSectionId } from './settingsRoute';
 
 export type WatchTrackingMediaType = 'movie' | 'series';
 type WatchTrackingMasterKey =
@@ -77,6 +77,55 @@ export const WATCH_TRACKING_SERVICE_DEFINITIONS: Record<
     connectHint: 'Add your PublicMetaDB API key in the Integrations tab.',
   },
 };
+
+export function scrobblesJellyfin(config: AppConfig): boolean {
+  return config.playbackReporting === true && config.jellyfinScrobbling !== false;
+}
+
+export function scrobblesStremio(config: AppConfig): boolean {
+  return config.playbackReporting === true && config.stremioScrobbling === true;
+}
+
+export type ConnectTarget = { section: SettingsSectionId; dialog?: IntegrationDialog; anchor?: string };
+
+/** Where a service is connected: its sign-in in Catalogs, or its key field in Integrations. */
+export function connectTargetFor(service: WatchTrackingService): ConnectTarget {
+  if (service === 'simkl' || service === 'anilist' || service === 'mal') return { section: 'catalogs', dialog: service };
+  return { section: 'integrations', anchor: service };
+}
+
+export function openServiceConnect(service: WatchTrackingService): void {
+  const target = connectTargetFor(service);
+  if (target.dialog) requestIntegrationDialog(target.dialog);
+  navigateToSettingsSection(target.section, target.anchor);
+}
+
+export function anyServiceConnected(config: AppConfig): boolean {
+  return WATCH_TRACKING_SERVICES.some((service) => WATCH_TRACKING_SERVICE_DEFINITIONS[service].hasCredential(config));
+}
+
+/** Mirrors the manifest: the Stremio events are declared with the switch alone. */
+export function declaresStremioEvents(config: AppConfig): boolean {
+  return scrobblesStremio(config);
+}
+
+export type StremioLinkState = 'reinstall' | 'waiting' | 'ok';
+
+export function stremioLinkState(
+  since: number | undefined,
+  status?: { manifestAt: number | null; eventAt: number | null },
+): StremioLinkState {
+  const from = since ?? 0;
+  if (status?.eventAt && status.eventAt >= from) return 'ok';
+  if (status?.manifestAt && status.manifestAt >= from) return 'waiting';
+  return 'reinstall';
+}
+
+export function withViewer(installUrl: string, cardId: string): string {
+  const url = new URL(installUrl);
+  url.searchParams.set('viewer', cardId);
+  return url.toString();
+}
 
 export function isWatchTrackingMediaTypeSelected(
   config: AppConfig,

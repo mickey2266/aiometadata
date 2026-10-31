@@ -7,6 +7,7 @@ export type SettingsSectionId =
   | 'filters'
   | 'search'
   | 'catalogs'
+  | 'watch-tracking'
   | 'configuration';
 
 export interface SettingsSection {
@@ -24,6 +25,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   { id: 'filters', title: 'Filters' },
   { id: 'search', title: 'Search' },
   { id: 'catalogs', title: 'Catalogs' },
+  { id: 'watch-tracking', title: 'Watch Tracking' },
   { id: 'configuration', title: 'Configuration' },
 ];
 
@@ -78,10 +80,27 @@ export function hashFor(id: SettingsSectionId, anchor?: string | null): string {
 export const SETTINGS_LAYOUT_NAVIGATE_EVENT = 'settings-layout:navigate';
 
 /** Lets components outside the layout switch sections without threading a prop through. */
-export function navigateToSettingsSection(tab: SettingsSectionId): void {
+export function navigateToSettingsSection(tab: SettingsSectionId, anchor?: string): void {
   window.dispatchEvent(
-    new CustomEvent(SETTINGS_LAYOUT_NAVIGATE_EVENT, { detail: { tab, scrollToTop: true } })
+    new CustomEvent(SETTINGS_LAYOUT_NAVIGATE_EVENT, { detail: { tab, scrollToTop: true, ...(anchor ? { anchor } : {}) } })
   );
+}
+
+export type IntegrationDialog = 'simkl' | 'anilist' | 'mal';
+export const OPEN_INTEGRATION_EVENT = 'settings:open-integration';
+
+let pendingIntegration: IntegrationDialog | null = null;
+
+/** Asks Catalogs to open a service's sign-in, now if it is showing or as soon as it mounts. */
+export function requestIntegrationDialog(service: IntegrationDialog): void {
+  pendingIntegration = service;
+  window.dispatchEvent(new CustomEvent(OPEN_INTEGRATION_EVENT, { detail: service }));
+}
+
+export function consumeIntegrationDialogRequest(): IntegrationDialog | null {
+  const requested = pendingIntegration;
+  pendingIntegration = null;
+  return requested;
 }
 
 let pendingCollectionBuilder = false;

@@ -24,7 +24,7 @@ import { mergeGenreOptions } from '../utils/mergedCatalog';
 import { fetchLumiereGenres, lumiereApiBase, lumiereGenreLabel, lumiereListOf } from '../utils/lumiereLists';
 const { getSetting }: any = require('./settingsService');
 import consola from 'consola';
-import { hasAnyWatchTrackingEnabled } from './watchTracking';
+import { hasAnyWatchTrackingEnabled, scrobbleResources, scrobblesJellyfin } from './watchTracking';
 const logger = consola.withTag('Manifest');
 
 
@@ -1754,10 +1754,8 @@ async function getManifest(config: any, opts: { tags?: string[]; userUUID?: stri
   // a front-end start delivering. Named as strings: a reader validates object resources against the names it
   // knows, and one that has never heard of these would reject the manifest whole.
   const anyoneTracks = watchTrackingEnabled || holderCards(config).some((card) => hasAnyWatchTrackingEnabled(withAccountOwner(config, card.id)));
-  const playbackReporting = anyoneTracks && config.playbackReporting === true;
-  if (playbackReporting) {
-    resources.push("watch_state", "playback");
-  }
+  const playbackReporting = anyoneTracks && scrobblesJellyfin(config);
+  resources.push(...scrobbleResources(config, anyoneTracks));
 
   const manifest = {
     id: buildInfo.name,

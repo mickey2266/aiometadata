@@ -461,6 +461,13 @@ export interface AppConfig {
   jellyfinMarkUnaired?: boolean;
   /** Playback is reported by the client, so the subtitle trigger is not used. */
   playbackReporting?: boolean;
+  /** Jellyfin plays reach the trackers under playback reporting. On when unset. */
+  jellyfinScrobbling?: boolean;
+  /** Stremio player and library events are received under playback reporting. */
+  stremioScrobbling?: boolean;
+  stremioLibraryWatchlist?: boolean;
+  /** When the Stremio switch was last turned on, to tell whether the installed manifest predates it. */
+  stremioScrobblingSince?: number;
   /** Password a Jellyfin client signs in with, for accounts that have no configuration password. */
   jellyfinAppPassword?: string;
   /** Tracker the Jellyfin resume shelf reads from. `auto` picks a capable one. */

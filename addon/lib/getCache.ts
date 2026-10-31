@@ -2411,6 +2411,10 @@ const CATALOG_VIEW_SKIPPED = new Set([
   'addonName',
   'showDisabledCatalogs',
   'playbackReporting',
+  'jellyfinScrobbling',
+  'stremioScrobbling',
+  'stremioLibraryWatchlist',
+  'stremioScrobblingSince',
   'showRateMeButton',
 ]);
 const CATALOG_VIEW_SKIPPED_KEYS = new Set(['malTokenId', 'anilistTokenId', 'simklTokenId', 'traktTokenId', 'movieLensCredId', 'trakt', 'simkl', 'gemini', 'openrouter']);
