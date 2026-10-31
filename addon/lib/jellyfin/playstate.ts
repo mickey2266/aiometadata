@@ -802,6 +802,8 @@ export async function recordStremioPlay(userUUID: string, config: any, event: Pl
   if (event.durationMs <= 0) {
     if (event.action === 'start' && !known) {
       setPosition(key, { positionMs: event.positionMs, at: Date.now(), paused: true, viewer: config?.jellyfinProfileId ?? null, device: 'stremio', app: STREMIO_APP });
+    } else if (event.action === 'stop') {
+      deletePosition(key);
     }
     return;
   }
