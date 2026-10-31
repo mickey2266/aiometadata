@@ -70,7 +70,7 @@ async function indexFor(userUUID: string, service: string): Promise<Index> {
   const index: Index = { byBase: new Map(), byTheirs: new Map() };
   const groups = new Map<string, TrackerMatch>();
   let failed = false;
-  const rows = await database.listTrackerMatches(userUUID, service).catch(() => {
+  const rows = await database.listTrackerMatches(userUUID, service, true).catch(() => {
     failed = true;
     return [];
   });
@@ -114,7 +114,7 @@ export async function saveMatch(userUUID: string, service: string, match: Omit<T
   const bases = [...new Set(match.bases)];
   const saved: TrackerMatch = { ...match, bases, group: bases[0], updatedAt: Date.now() };
   // A match made earlier for any of these ids is replaced whole, or its other ids would keep the old target.
-  const replaced = new Set<string>(((await database.listTrackerMatches(userUUID, service)) as any[]).filter((row) => bases.includes(String(row.base))).map((row) => String(row.match_group)));
+  const replaced = new Set<string>(((await database.listTrackerMatches(userUUID, service, true)) as any[]).filter((row) => bases.includes(String(row.base))).map((row) => String(row.match_group)));
   for (const group of replaced) await database.deleteTrackerMatch(userUUID, service, group);
   await database.saveTrackerMatch(userUUID, service, saved.group, bases, JSON.stringify(saved));
   forgetMatches(userUUID, service);

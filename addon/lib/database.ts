@@ -3055,11 +3055,11 @@ class Database {
     await this.runQuery(query, [userUUID, profile]);
   }
 
-  async listTrackerMatches(userUUID: string, service: string): Promise<Array<{ base: string; match_group: string; data: string }>> {
+  async listTrackerMatches(userUUID: string, service: string, primary = false): Promise<Array<{ base: string; match_group: string; data: string }>> {
     const query = this.type === 'sqlite'
       ? 'SELECT base, match_group, data FROM tracker_matches WHERE user_uuid = ? AND service = ?'
       : 'SELECT base, match_group, data FROM tracker_matches WHERE user_uuid = $1 AND service = $2';
-    return (await this.allQuery(query, [userUUID, service])) || [];
+    return (await (primary ? this.allPrimaryQuery(query, [userUUID, service]) : this.allQuery(query, [userUUID, service]))) || [];
   }
 
   async saveTrackerMatch(userUUID: string, service: string, group: string, bases: string[], data: string): Promise<void> {
