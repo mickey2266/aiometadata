@@ -109,6 +109,10 @@ export function declaresStremioEvents(config: AppConfig): boolean {
   return scrobblesStremio(config);
 }
 
+export function withStremioEventsSince<T extends AppConfig>(prev: T, next: T): T {
+  return !declaresStremioEvents(prev) && declaresStremioEvents(next) ? { ...next, stremioScrobblingSince: Date.now() } : next;
+}
+
 export type StremioLinkState = 'reinstall' | 'waiting' | 'ok';
 
 export function stremioLinkState(
