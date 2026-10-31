@@ -104,9 +104,10 @@ export async function listMatches(userUUID: string, service: string): Promise<Tr
   return [...new Set((await indexFor(userUUID, service)).byBase.values())];
 }
 
-export async function matchFor(userUUID: string | undefined, service: string, base: string): Promise<TrackerMatch | null> {
+export async function matchFor(userUUID: string | undefined, service: string, base: string, kind?: TrackerMatch['kind']): Promise<TrackerMatch | null> {
   if (!userUUID || !matchable(service)) return null;
-  return (await indexFor(userUUID, service)).byBase.get(base) ?? null;
+  const match = (await indexFor(userUUID, service)).byBase.get(base) ?? null;
+  return match && (!kind || match.kind === kind) ? match : null;
 }
 
 export async function saveMatch(userUUID: string, service: string, match: Omit<TrackerMatch, 'group' | 'updatedAt'>): Promise<TrackerMatch> {
