@@ -69,7 +69,12 @@ async function indexFor(userUUID: string, service: string): Promise<Index> {
   const epoch = epochs.get(key) ?? 0;
   const index: Index = { byBase: new Map(), byTheirs: new Map() };
   const groups = new Map<string, TrackerMatch>();
-  for (const row of await database.listTrackerMatches(userUUID, service).catch(() => [])) {
+  let failed = false;
+  const rows = await database.listTrackerMatches(userUUID, service).catch(() => {
+    failed = true;
+    return [];
+  });
+  for (const row of rows) {
     let match = groups.get(String(row.match_group));
     if (!match) {
       try {
@@ -84,7 +89,7 @@ async function indexFor(userUUID: string, service: string): Promise<Index> {
     index.byBase.set(String(row.base), match);
   }
   // A build that read the rows before a change is not kept.
-  if ((epochs.get(key) ?? 0) === epoch) indexes.set(key, index);
+  if (!failed && (epochs.get(key) ?? 0) === epoch) indexes.set(key, index);
   return index;
 }
 
