@@ -767,29 +767,46 @@ async function markedItemIds(
 
 const STREMIO_APP = { client: 'Stremio', device: 'Stremio', version: '' };
 
-// Marked watched while playing: the stop Stremio sends at close would otherwise save a resume point over the watch.
-const markedWhilePlaying = new LRUCache<string, true>({ max: 5000, ttl: 12 * 60 * 60 * 1000 });
+// Marked watched during a play: what Stremio still sends for it until the stop would save a resume point over the watch.
+const markedWhilePlaying = new LRUCache<string, true>({ max: 5000, ttl: 3 * 60 * 60 * 1000 });
+
+function guardPlay(key: string, runtimeMs: number | null, positionMs: number): void {
+  const left = runtimeMs && runtimeMs > positionMs ? runtimeMs - positionMs : 2 * 60 * 60 * 1000;
+  markedWhilePlaying.set(key, true, { ttl: left + 15 * 60 * 1000 });
+}
 
 export async function recordStremioPlay(userUUID: string, config: any, event: PlayerEvent): Promise<void> {
-  if (event.durationMs <= 0) return;
   const descriptor = descriptorForVideo(event.type, event.videoId);
   if (!descriptor) return;
   const itemId = encodeJellyfinId(descriptor);
+  const { profileKey } = require('./profiles');
+  const profile = profileKey(config);
+  const key = `${userUUID}:${profile}:${itemId}`;
+
+  if (markedWhilePlaying.has(key)) {
+    if (event.action === 'stop') {
+      markedWhilePlaying.delete(key);
+      deletePosition(key);
+    }
+    return;
+  }
+
+  const known = await getPosition(key);
+  // A start before the stream knows its length still opens the play, so a mark during it is caught;
+  // it is held as paused so the start that follows with a length is still told to the trackers.
+  if (event.durationMs <= 0) {
+    if (event.action === 'start' && !known) {
+      setPosition(key, { positionMs: event.positionMs, at: Date.now(), paused: true, viewer: config?.jellyfinProfileId ?? null, device: 'stremio', app: STREMIO_APP });
+    }
+    return;
+  }
+
   const resolved = await resolveSession(userUUID, itemId);
   if (!resolved) return;
   const session: ResolvedSession = { ...resolved, runtimeMs: event.durationMs, runtimeFrom: 'client' };
 
-  const { profileKey } = require('./profiles');
-  const profile = profileKey(config);
-  const key = `${userUUID}:${profile}:${itemId}`;
-  const known = await getPosition(key);
-
   if (event.action === 'stop') {
     deletePosition(key);
-    if (markedWhilePlaying.has(key)) {
-      markedWhilePlaying.delete(key);
-      return;
-    }
     const watchedAt = await playedThresholdFor(userUUID, config?.jellyfinProfileId ?? null);
     await settle(userUUID, config, profile, session, 'stop', event.positionMs, isPlayed(event.positionMs, event.durationMs, watchedAt), null, 'stremio');
     return;
@@ -827,7 +844,12 @@ export async function recordStremioMark(userUUID: string, config: any, event: Li
   const { profileKey } = require('./profiles');
   const profile = profileKey(config);
   for (const id of marked.ids) {
-    if (await closeOpenSession(userUUID, config, profile, id, played, 'stremio') && played) markedWhilePlaying.set(`${userUUID}:${profile}:${id}`, true);
+    const key = `${userUUID}:${profile}:${id}`;
+    const held = await getPosition(key);
+    await closeOpenSession(userUUID, config, profile, id, played, 'stremio');
+    if (!held) continue;
+    if (played) guardPlay(key, (await resolveSession(userUUID, id))?.runtimeMs ?? null, held.positionMs);
+    else markedWhilePlaying.delete(key);
   }
   await markItems(userUUID, config, profile, marked, played ? 'played' : 'unplayed', 'stremio');
 }
