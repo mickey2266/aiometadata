@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import JellyfinCalendar from "./JellyfinCalendar";
 import JellyfinLibrary from "./JellyfinLibrary";
+import JellyfinYear from "./JellyfinYear";
 import JellyfinTitlePage from "./JellyfinTitle";
 import JellyfinSearch, { type LocalTitle } from "./JellyfinSearch";
 import JellyfinImport from "./JellyfinImport";
@@ -9,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Activity as ActivityIcon, Bookmark, CalendarDays, History, LayoutGrid, Loader2, Network, Search, TableProperties, Tv, Upload, X } from "lucide-react";
+import { Activity as ActivityIcon, Bookmark, CalendarDays, History, LayoutGrid, Loader2, Network, Search, Sparkles, TableProperties, Tv, Upload, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useJellyfinClearResume,
@@ -40,6 +41,7 @@ const SECTIONS: Array<{ key: JellyfinSection; label: string; icon: typeof Tv }> 
   { key: "shows", label: "Shows", icon: Tv },
   { key: "calendar", label: "Calendar", icon: CalendarDays },
   { key: "history", label: "History", icon: History },
+  { key: "year", label: "Year", icon: Sparkles },
   { key: "trackers", label: "Trackers", icon: Network },
 ];
 
@@ -133,6 +135,11 @@ function Configuration({ userUUID, route, activeTab, onClose }: { userUUID: stri
   const titleAction = useJellyfinTitleAction();
   const [remote, setRemote] = useState<{ target: RemoteTarget; at: { x: number; y: number }; profile: string | null; profileName: string } | null>(null);
   const closeRemote = useCallback(() => setRemote(null), []);
+  // A profile deleted since it was picked, here or remembered from before, goes back to everyone.
+  useEffect(() => {
+    if (profile === null || !data?.viewers || data.userUUID !== userUUID || data.profile !== profile) return;
+    if (!data.viewers.some((p) => p.key === profile)) setProfile(null);
+  }, [data, profile, userUUID]);
   const progressAction = useCallback(async (row: JellyfinPlayRow, action: ProgressAction) => {
     try {
       if (action === "clear") await clearResume(userUUID, row.profileKey, row.videoId);
@@ -270,6 +277,7 @@ function Configuration({ userUUID, route, activeTab, onClose }: { userUUID: stri
             {played.rows.length > 0 && <><Sentinel key={played.rows.length} onVisible={played.loadMore} /><MoreFooter paged={played} /></>}
           </Shelf>
         )}
+        {section === "year" && <JellyfinYear key={`year:${profile ?? ""}`} userUUID={userUUID} profile={profile} profileName={profileName} activeTab={activeTab} />}
         {section === "trackers" && <JellyfinSync key={`sync:${profile ?? ""}`} userUUID={userUUID} profile={profile} profileName={profileName} watched={watched} rows={data.sync} activeTab={activeTab} />}
       </div>
       )}

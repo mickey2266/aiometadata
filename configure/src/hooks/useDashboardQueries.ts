@@ -1598,25 +1598,35 @@ export interface JellyfinConfiguration {
   totals: { progress: number; played: number };
 }
 
-function useJellyfinQuery<T>(key: readonly unknown[], path: string, options: DashboardQueryOptions & { enabledWhen?: boolean; poll?: boolean } = {}) {
+type Revalidation<T> = { pathFor: (held: T) => string | null; merge: (fresh: T, held: T) => T };
+
+function useJellyfinQuery<T>(key: readonly unknown[], path: string, options: DashboardQueryOptions & { enabledWhen?: boolean; poll?: boolean; pollEvery?: (data: T | undefined) => number | false; revalidate?: Revalidation<T> } = {}) {
   const { isAdmin, logout } = useAdmin();
   const getHeaders = useApiHeaders();
   const isVisible = usePageVisibility();
-  const { activeTab = 'overview', enabled = true, enabledWhen = true, poll = true } = options;
+  const queryClient = useQueryClient();
+  const { activeTab = 'overview', enabled = true, enabledWhen = true, poll = true, pollEvery, revalidate } = options;
   const isActiveTab = activeTab === 'jellyfin';
 
   return useQuery({
     queryKey: key,
     queryFn: async () => {
       try {
-        return await fetchDashboardData<T>(path, getHeaders());
+        const held = revalidate ? queryClient.getQueryData<T>(key) : undefined;
+        const asked = held !== undefined && revalidate ? revalidate.pathFor(held) : null;
+        const fresh = await fetchDashboardData<T>(asked ?? path, getHeaders());
+        return held !== undefined && asked && revalidate ? revalidate.merge(fresh, held) : fresh;
       } catch (error) {
         if (error instanceof Error && error.message === 'UNAUTHORIZED') logout();
         throw error;
       }
     },
     enabled: enabled && enabledWhen && isAdmin && isActiveTab,
-    refetchInterval: poll && isVisible && isActiveTab && isAdmin ? POLLING_INTERVALS.JELLYFIN : false,
+    refetchInterval: (query) => {
+      if (!isVisible || !isActiveTab || !isAdmin) return false;
+      if (pollEvery) return pollEvery(query.state.data as T | undefined);
+      return poll ? POLLING_INTERVALS.JELLYFIN : false;
+    },
     refetchIntervalInBackground: false,
     placeholderData: (previous) => previous,
   });
@@ -1679,6 +1689,168 @@ export function useJellyfinShows(userUUID: string | null, profile: string | null
     ['dashboard', 'jellyfin', 'shows', userUUID, profile, fresh] as const,
     `/api/dashboard/jellyfin/${encodeURIComponent(userUUID ?? '')}/shows${suffix}`,
     { ...options, enabledWhen: Boolean(userUUID), poll: false }
+  );
+}
+
+export type JellyfinYearPlay = [videoId: string, at: number, runtimeMs: number, runtimeSource: string, overfull: 0 | 1, spellings: string[]];
+
+export interface JellyfinShowProgress {
+  aired: number;
+  seen: number;
+  seasons: number;
+  finishedAt: number | null;
+}
+
+export interface JellyfinYearTitle {
+  key: string;
+  kind: 'movie' | 'series';
+  name: string | null;
+  anime: boolean;
+  watchMs: number;
+  ids: string[];
+  episodes: number;
+  progress: JellyfinShowProgress | null;
+  facts: {
+    source: string;
+    year: number | null;
+    status: string | null;
+    runtimeMs: number;
+    genres: string[];
+    countries: string[];
+    networks: string[];
+    studios: string[];
+    language: string | null;
+    poster: string | null;
+    background?: string | null;
+    logo?: string | null;
+  } | null;
+  plays: JellyfinYearPlay[];
+}
+
+export interface JellyfinAnimeEntry {
+  malId: number;
+  titleKey: string;
+  name: string;
+  title: string | null;
+  japanese: string | null;
+  type: string | null;
+  year: number | null;
+  season: string | null;
+  airedFrom: string | null;
+  airedTo: string | null;
+  status: string | null;
+  episodesTotal: number | null;
+  episodes: number;
+  plays: number;
+  watchMs: number;
+  firstAt: number;
+  image: string | null;
+  rank: number | null;
+  score: number | null;
+  source: string | null;
+  studios: string[];
+  genres: string[];
+  themes: string[];
+  demographics: string[];
+}
+
+export interface JellyfinAnimeVoice {
+  malId: number;
+  id: string;
+  name: string;
+  japanese: string | null;
+  image: string | null;
+  episodes: number;
+  roles: Array<{ character: string; image: string | null; entries: number[] }>;
+}
+
+export interface JellyfinYearTitleRef {
+  name: string;
+  key: string;
+  kind: 'movie' | 'series';
+  poster: string | null;
+}
+
+export interface JellyfinYearPersonRef {
+  id: string;
+  name: string;
+  photo: string | null;
+}
+
+export interface JellyfinPeopleCard extends JellyfinYearPersonRef {
+  titles: number;
+  shown: JellyfinYearTitleRef[];
+  voiced: boolean;
+}
+
+export interface JellyfinYearPeople {
+  cast: JellyfinPeopleCard[];
+  directors: Array<JellyfinYearPersonRef & { films: number }>;
+  together: { people: [JellyfinYearPersonRef, JellyfinYearPersonRef]; films: number } | null;
+  link: (JellyfinYearPersonRef & { show: JellyfinYearTitleRef; films: JellyfinYearTitleRef[] }) | null;
+  themes: Array<[string, number]>;
+  books: number;
+  manga: number;
+  networks: Array<{ name: string; logo: string | null; plays: number }>;
+}
+
+export interface JellyfinYearData {
+  version: number;
+  year: number;
+  timeZone: string;
+  totals: {
+    plays: number;
+    watchMs: number;
+    films: { titles: number; plays: number; watchMs: number };
+    shows: { titles: number; plays: number; watchMs: number };
+    anime: { titles: number; plays: number };
+    rhythmPlays: number;
+    bulk: { plays: number; titles: number };
+  };
+  topShows: string[];
+  network: { name: string; logo: string | null } | null;
+  anime: { entries: JellyfinAnimeEntry[]; voices: JellyfinAnimeVoice[]; missing: number; unmatched: number } | null;
+  people: JellyfinYearPeople | null;
+  titles: JellyfinYearTitle[];
+}
+
+export type JellyfinYearBuild = 'queued' | 'building' | 'busy';
+
+export interface JellyfinYearReview {
+  year: number;
+  years: number[];
+  status: 'ready' | JellyfinYearBuild;
+  ahead?: number;
+  stale: boolean;
+  rebuilding: JellyfinYearBuild | null;
+  builtAt: number | null;
+  data: JellyfinYearData | null;
+  ratings: Record<string, number>;
+  unchanged?: boolean;
+}
+
+const YEAR_BUILD_POLL_MS = 2000;
+const YEAR_BUSY_POLL_MS = 15000;
+
+export function useJellyfinYear(userUUID: string | null, profile: string | null, year: number, options: DashboardQueryOptions = {}) {
+  const params = new URLSearchParams({ year: String(year) });
+  if (profile !== null) params.set('profile', profile);
+  return useJellyfinQuery<JellyfinYearReview>(
+    ['dashboard', 'jellyfin', 'year', userUUID, profile, year] as const,
+    `/api/dashboard/jellyfin/${encodeURIComponent(userUUID ?? '')}/year?${params}`,
+    {
+      ...options,
+      enabledWhen: Boolean(userUUID),
+      pollEvery: (data) => {
+        const build = data?.status === 'ready' ? data.rebuilding : data?.status;
+        if (build === 'busy') return YEAR_BUSY_POLL_MS;
+        return build ? YEAR_BUILD_POLL_MS : false;
+      },
+      revalidate: {
+        pathFor: (held) => (held.data && held.builtAt ? `/api/dashboard/jellyfin/${encodeURIComponent(userUUID ?? '')}/year?${params}&have=${held.builtAt}` : null),
+        merge: (fresh, held) => (fresh.unchanged ? { ...fresh, unchanged: undefined, data: held.data } : fresh),
+      },
+    }
   );
 }
 
@@ -1823,6 +1995,13 @@ export interface JellyfinTitleEpisode {
   watches: number[];
 }
 
+export interface JellyfinTitleRating {
+  source: string;
+  value: number;
+  scale: number;
+  url?: string;
+}
+
 export interface JellyfinTitle {
   id: string;
   metaId: string;
@@ -1832,6 +2011,10 @@ export interface JellyfinTitle {
   year: string | null;
   overview: string | null;
   genres: string[];
+  certification?: string | null;
+  studios?: string[];
+  tags?: string[];
+  ratings?: JellyfinTitleRating[];
   score: string | null;
   runtime: string | null;
   releasedAt: number | null;
@@ -1902,7 +2085,7 @@ export function useJellyfinPerson(userUUID: string | null, profile: string | nul
 export function useJellyfinPersonTitles(userUUID: string | null, profile: string | null, personId: string | null, kind: JellyfinLibraryKind, role: JellyfinPersonRole, order: 'newest' | 'oldest', offset: number, options: DashboardQueryOptions & { enabledWhen?: boolean } = {}) {
   const params = new URLSearchParams({ item: personId ?? '', kind, role, order, offset: String(offset), limit: String(JELLYFIN_PERSON_PAGE) });
   if (profile !== null) params.set('profile', profile);
-  return useJellyfinQuery<{ offset: number; total: number; rows: JellyfinPersonTitle[] }>(
+  return useJellyfinQuery<{ offset: number; total: number; next?: number; rows: JellyfinPersonTitle[] }>(
     ['dashboard', 'jellyfin', 'person-titles', userUUID, profile, personId, kind, role, order, offset] as const,
     `/api/dashboard/jellyfin/${encodeURIComponent(userUUID ?? '')}/person/titles?${params}`,
     { ...options, enabledWhen: Boolean(userUUID && personId) && options.enabledWhen !== false, poll: false }

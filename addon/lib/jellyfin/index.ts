@@ -33,7 +33,7 @@ import { buildViews, catalogView, collectionTypeFor, findCatalogByViewId, getCat
 import { decodeJellyfinId } from './ids';
 import { liveDevices, rememberTokenDevice, saveCapabilities, sendToDevice } from './socket';
 import { artTag, imageTag, isWideTag } from './imageTags';
-import { buildEpisodes, buildSeasons, withSeasonAnimeIds, fetchCatalogPage, fetchMeta, fetchWindow, filterByIncludeTypes, includeTypesFilter, buildEpisode, findEpisodeVideo, knownCatalogLength, metaToBaseItem, pageChildren, pageEpisodes, recallArt, recallImages, rememberArt, rememberImages, sortNameFor, warmCatalogLengths, isLandscapeCatalog, showLandscape } from './items';
+import { buildEpisodes, buildSeasons, withSeasonAnimeIds, fetchCatalogPage, fetchMeta, fetchWindow, servedOrder, filterByIncludeTypes, includeTypesFilter, buildEpisode, findEpisodeVideo, knownCatalogLength, metaToBaseItem, pageChildren, pageEpisodes, recallArt, recallImages, rememberArt, rememberImages, sortNameFor, warmCatalogLengths, isLandscapeCatalog, showLandscape } from './items';
 import { dashedGuid, encodeJellyfinId, normaliseJellyfinId, parseStremioId, stremioIdFor } from './ids';
 import { coalesce, fetchStreams, fileFor, languageCode, languageName, mediaSourceFor, normaliseStreamBase, forgetDuration, placeholderMediaSource, recallDuration, recallFailure, recallIssued, recallStreams, rememberDuration, rememberFailure, rememberStreams, runtimeTicksFrom, streamClient, streamsState, streamUserAgent, toNotice, toPlayable, type StreamClient } from './streams';
 import { fetchAddonSubtitles, formatOf, pickSubtitles, recallOffered, rememberOffered, subtitleBody, subtitleCodecFor, subtitleExtensionOf, subtitleFormatFor, subtitleLanguage, type SubtitleTrack } from './subtitles';
@@ -418,15 +418,15 @@ export async function runSearchCatalog(userUUID: string, config: any, catalog: {
 
 let personReader: {
   detail: (userUUID: string, config: any, personId: string) => Promise<{ item: any; credits: any[] } | null>;
-  titles: (userUUID: string, config: any, personId: string, types: string | undefined, roles: string[], start: number, take: number, ascending: boolean) => Promise<{ items: any[]; total: number }>;
+  titles: (userUUID: string, config: any, personId: string, types: string | undefined, roles: string[], start: number, take: number, ascending: boolean) => Promise<{ items: any[]; total: number; next: number }>;
 } | null = null;
 
 export async function readPerson(userUUID: string, config: any, personId: string): Promise<{ item: any; credits: any[] } | null> {
   return personReader ? personReader.detail(userUUID, config, personId) : null;
 }
 
-export async function readPersonTitles(userUUID: string, config: any, personId: string, types: string | undefined, roles: string[], start: number, take: number, ascending: boolean): Promise<{ items: any[]; total: number }> {
-  return personReader ? personReader.titles(userUUID, config, personId, types, roles, start, take, ascending) : { items: [], total: 0 };
+export async function readPersonTitles(userUUID: string, config: any, personId: string, types: string | undefined, roles: string[], start: number, take: number, ascending: boolean): Promise<{ items: any[]; total: number; next: number }> {
+  return personReader ? personReader.titles(userUUID, config, personId, types, roles, start, take, ascending) : { items: [], total: 0, next: start };
 }
 
 export async function readTitle(userUUID: string, config: any, itemId: string): Promise<{ meta: any; item: any; episodes: any[]; seasons: any[] } | null> {
@@ -1423,7 +1423,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
         ).catch(() => ({ items: [] as any[], hasMore: false }));
 
         const viewId = encodeJellyfinId({ k: 'view', t: catalog.type, c: catalog.id });
-        for (const meta of page.items) {
+        for (const meta of servedOrder(page.items, page)) {
           if (!meta?.id || collected.length >= limit) continue;
           collected.push(metaToBaseItem(meta, catalog.type, serverId, viewId));
         }
@@ -1596,7 +1596,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     );
     const hasMore = window.hasMore;
 
-    const items = window.items
+    const items = servedOrder(window.items, window)
       .filter((meta: any) => meta && meta.id)
       .map((meta: any) => metaToBaseItem(meta, catalog.type, serverId, String(parentId)));
     if (isLandscapeCatalog(config, catalog)) showLandscape(items);
@@ -2154,11 +2154,11 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     startIndex: number,
     take: number,
     ascending = false
-  ): Promise<{ items: any[]; total: number }> => {
+  ): Promise<{ items: any[]; total: number; next: number }> => {
     const descriptor = await decodeJellyfinId(personId);
-    if (!descriptor || descriptor.k !== 'person') return { items: [], total: 0 };
+    if (!descriptor || descriptor.k !== 'person') return { items: [], total: 0, next: startIndex };
     const person = await resolvePerson(config, descriptor);
-    if (!person) return { items: [], total: 0 };
+    if (!person) return { items: [], total: 0, next: startIndex };
     const wanted = includeItemTypes ? String(includeItemTypes) : undefined;
     const newest = (await personCredits(config, person)).filter(
       (meta: any) =>
@@ -2172,7 +2172,8 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const cards = await titleCards(config, userUUID, page);
     const items = cards.map((card: any, i: number) => metaToBaseItem(card, page[i].type, serverId, null)).filter(keepsUnderProfileCap(config));
     await applyWatchedState(items, await watchedSnapshot(userUUID, config), userUUID, profileKey(config), config);
-    return { items, total: listed.length };
+    // The profile's cap thins a page after it is cut, so the next one starts past what was read, not what is shown.
+    return { items, total: listed.length, next: startIndex + page.length };
   };
 
   const searchAcross = async (
@@ -2841,7 +2842,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const serverId = serverIdFor(userUUID);
     const played = await playedPick(req, userUUID, config, catalog.type, serverId, String(parentId));
     const window = await fetchWindow(userUUID, catalog, 0, limit, {}, undefined, profileTags(config), played.key, played.pick);
-    const items = window.items
+    const items = servedOrder(window.items, window)
       .filter((meta: any) => meta && meta.id)
       .map((meta: any) => metaToBaseItem(meta, catalog.type, serverId, String(parentId)));
     if (isLandscapeCatalog(config, catalog)) showLandscape(items);
