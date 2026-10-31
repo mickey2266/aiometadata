@@ -17,13 +17,14 @@ import { timeYear, type TimedYear, type YearTitle } from './timed';
 const logger = consola.withTag('YearReview');
 const database: any = require('../../database');
 
-const REVIEW_VERSION = 1;
+const REVIEW_VERSION = 2;
 const RATING_BATCH = 500;
 const SETUP_DIGEST = 12;
 
 type Stored = { fingerprint: string; builtAt: number; data: any };
 
 const memory = new LRUCache<string, Stored>({ max: envInt('JELLYFIN_YEAR_REVIEW_MEMORY', 20, 1) });
+const yearLists = new LRUCache<string, Promise<number[]>>({ max: 500, ttl: 60 * 1000 });
 
 const reviewKey = (userUUID: string, historyKey: string, year: number) => `${userUUID}|${historyKey}|${year}`;
 
@@ -31,7 +32,17 @@ function localYear(at: number, timeZone: string): number {
   return Number(new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric' }).format(new Date(at)));
 }
 
-async function yearsOf(userUUID: string, historyKey: string, timeZone: string): Promise<number[]> {
+function yearsOf(userUUID: string, historyKey: string, timeZone: string): Promise<number[]> {
+  const key = `${userUUID}|${historyKey}|${timeZone}`;
+  const held = yearLists.get(key);
+  if (held) return held;
+  const read = readYears(userUUID, historyKey, timeZone);
+  yearLists.set(key, read);
+  read.catch(() => yearLists.delete(key));
+  return read;
+}
+
+async function readYears(userUUID: string, historyKey: string, timeZone: string): Promise<number[]> {
   const stats = await database.watchStatsBetween(userUUID, historyKey, 0, Number.MAX_SAFE_INTEGER);
   if (stats.first === null || stats.last === null) return [];
   const years: number[] = [];
@@ -41,9 +52,10 @@ async function yearsOf(userUUID: string, historyKey: string, timeZone: string): 
 
 async function fingerprintOf(userUUID: string, historyKey: string, year: number, timeZone: string): Promise<string> {
   const { from, to } = yearBounds(year, timeZone);
-  const [stats, meta] = await Promise.all([database.watchStatsBetween(userUUID, historyKey, from, to), metaContextDigest(userUUID)]);
+  // Show progress reads the watches before the year too, so a change to those makes the review stale as well.
+  const [stats, before, meta] = await Promise.all([database.watchStatsBetween(userUUID, historyKey, from, to), database.watchStatsBetween(userUUID, historyKey, 0, from), metaContextDigest(userUUID)]);
   const setup = [REVIEW_VERSION, timeZone, meta, envInt('JELLYFIN_YEAR_REVIEW_BATCH_PLAYS', 6, 2), envInt('JELLYFIN_YEAR_REVIEW_BULK_GAP_SECONDS', 60, 0), envInt('JELLYFIN_REWATCH_MIN_GAP_MINUTES', 10, 0)];
-  const watches = [stats.count, stats.last, stats.sum];
+  const watches = [stats.count, stats.last, stats.sum, before.count, before.sum];
   return digest(setup) + digest(watches);
 }
 
@@ -65,7 +77,7 @@ async function networkOf(config: any, show: YearTitle | undefined): Promise<{ na
   return name ? { name, logo: await networkLogo(config, name) } : null;
 }
 
-function summarise(year: number, timeZone: string, timed: TimedYear, progress: Map<string, ShowProgress>, network: { name: string; logo: string | null } | null, animeLayer: AnimeYear | null, people: PeopleYear | null, bulk: YearPlay[]): any {
+function summarise(year: number, timeZone: string, timed: TimedYear, progress: Map<string, ShowProgress>, network: { name: string; logo: string | null } | null, animeLayer: AnimeYear | null, people: PeopleYear | null, bulk: YearPlay[], incomplete: boolean): any {
   const films = timed.titles.filter((title) => title.kind === 'movie');
   const shows = timed.titles.filter((title) => title.kind === 'series');
   const anime = timed.titles.filter((title) => title.anime);
@@ -74,6 +86,7 @@ function summarise(year: number, timeZone: string, timed: TimedYear, progress: M
     version: REVIEW_VERSION,
     year,
     timeZone,
+    incomplete,
     counts: timed.counts,
     topShows: rankShows(timed).map((title) => title.key),
     network,
@@ -112,15 +125,20 @@ async function buildYear(userUUID: string, profile: string | null, year: number,
     const played = await yearPlays(userUUID, historyKey, year, timeZone);
     const bulk = played.filter((play) => play.batch);
     const timed = await timeYear(userUUID, historyKey, played.filter((play) => !play.batch), timeZone);
-    const animeLayer = animeYear(timed).catch(() => null);
+    let incomplete = timed.counts.unbuilt > 0;
+    const lost = () => {
+      incomplete = true;
+      return null;
+    };
+    const animeLayer = animeYear(timed).catch(lost);
     const [progress, network, anime, people] = await Promise.all([
       showProgress(userUUID, historyKey, yearBounds(year, timeZone).to, timed),
       networkOf(config, rankShows(timed)[0]),
       animeLayer,
-      animeLayer.then((layer) => peopleYear(config, timed.titles, layer)).catch(() => null),
+      animeLayer.then((layer) => peopleYear(config, timed.titles, layer)).catch(lost),
     ]);
     const builtAt = Date.now();
-    const stored: Stored = { fingerprint, builtAt, data: summarise(year, timeZone, timed, progress, network, anime, people, bulk) };
+    const stored: Stored = { fingerprint, builtAt, data: summarise(year, timeZone, timed, progress, network, anime, people, bulk, incomplete) };
     memory.set(reviewKey(userUUID, historyKey, year), stored);
     await database.putYearReview(userUUID, historyKey, year, fingerprint, builtAt, stored.data);
     const maxAgeMs = envInt('JELLYFIN_YEAR_REVIEW_FACTS_HOURS', 7 * 24, 1) * 60 * 60 * 1000;
@@ -135,26 +153,32 @@ export async function dashboardYear(userUUID: string, profile: string | null, ye
     const timeZone = safeTimeZone(viewingTimeZone(config));
     const historyKey = profileKey(config);
     const key = reviewKey(userUUID, historyKey, year);
-    const [fingerprint, years] = await Promise.all([fingerprintOf(userUUID, historyKey, year, timeZone), yearsOf(userUUID, historyKey, timeZone)]);
+    // While this review builds, a poll only asks how far it got, so what the build will settle is not worked out again.
+    const inFlight = ticketFor(key);
+    const building = inFlight?.state === 'queued' || inFlight?.state === 'building';
+    const [fingerprint, years] = await Promise.all([building ? null : fingerprintOf(userUUID, historyKey, year, timeZone), yearsOf(userUUID, historyKey, timeZone)]);
     let stored = memory.get(key) ?? null;
     if (!stored) {
       stored = await database.getYearReview(userUUID, historyKey, year).catch(() => null);
       if (stored) memory.set(key, stored);
     }
-    const fresh = stored?.fingerprint === fingerprint;
-    const recent = !!stored && sameSetup(stored.fingerprint, fingerprint) && Date.now() - stored.builtAt < envInt('JELLYFIN_YEAR_REVIEW_MIN_REBUILD_MINUTES', 30, 0) * 60 * 1000;
-    const ticket = fresh || recent ? ticketFor(key) : enqueue(key, (waitedMs) => buildYear(userUUID, profile, year, waitedMs));
+    const settleMs = envInt('JELLYFIN_YEAR_REVIEW_MIN_REBUILD_MINUTES', 30, 0) * 60 * 1000;
+    // A review a failed fetch or the build budget left short is built again once it has settled, though no play changed.
+    const fresh = !building && stored?.fingerprint === fingerprint && !(stored.data?.incomplete && Date.now() - stored.builtAt >= settleMs);
+    const recent = !building && !!stored && sameSetup(stored.fingerprint, fingerprint!) && Date.now() - stored.builtAt < settleMs;
+    const ticket = building ? inFlight : fresh || recent ? ticketFor(key) : enqueue(key, (waitedMs) => buildYear(userUUID, profile, year, waitedMs));
     const unchanged = !!stored && stored.builtAt === have;
     return {
       year,
       years,
       status: stored ? 'ready' : ticket?.state ?? 'queued',
       ...(ticket?.state === 'queued' ? { ahead: ticket.ahead } : {}),
+      ...(ticket?.state === 'failed' ? { retryAt: ticket.retryAt } : {}),
       stale: !!stored && !fresh,
       rebuilding: stored && ticket ? ticket.state : null,
       builtAt: stored?.builtAt ?? null,
       ...(unchanged ? { unchanged: true, data: null } : { data: stored?.data ?? null }),
-      ratings: stored?.data ? await ratingsOf(userUUID, historyKey, stored.data) : {},
+      ...(building && unchanged ? {} : { ratings: stored?.data ? await ratingsOf(userUUID, historyKey, stored.data) : {} }),
     };
   });
 }

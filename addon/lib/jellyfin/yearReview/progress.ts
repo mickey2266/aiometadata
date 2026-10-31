@@ -23,11 +23,16 @@ export async function showProgress(userUUID: string, historyKey: string, to: num
   const out = new Map<string, ShowProgress>();
   const shows = timed.titles.filter((title) => title.kind === 'series' && Object.keys(title.facts?.releases ?? {}).length);
   const owner = new Map<string, string>();
-  for (const title of shows) for (const play of title.plays) for (const id of play.spellings) owner.set(baseOf(id), title.key);
+  for (const title of shows) {
+    for (const play of title.plays) for (const id of play.spellings) owner.set(baseOf(id), title.key);
+    // Episodes watched in earlier years may sit under another of the show's ids than this year's plays used.
+    const { imdb, tmdb, tvdb } = title.facts!.ids;
+    for (const base of [imdb, tmdb && `tmdb:${tmdb}`, tvdb && `tvdb:${tvdb}`]) if (base && !owner.has(base)) owner.set(base, title.key);
+  }
   if (!owner.size) return out;
 
   const releasesOf = new Map(shows.map((title) => [title.key, title.facts!.releases]));
-  const rows = (await database.listWatchesBetween(userUUID, historyKey, 0, to)).filter((row: { video_id: string }) => owner.has(baseOf(row.video_id)));
+  const rows = (await database.listEpisodeWatchesBefore(userUUID, historyKey, [...owner.keys()], to)).filter((row: { video_id: string }) => owner.has(baseOf(row.video_id)));
   const firstSeen = new Map<string, Map<string, number>>();
   for (const play of await foldPlays(rows)) {
     if (play.episode === null) continue;
