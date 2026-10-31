@@ -25,7 +25,7 @@ export function parseStremioEvent(resource: string, type: string, id: string, ex
   if (!id) return null;
   const params = new URLSearchParams(extra || '');
   const action = params.get('action') ?? '';
-  const known = type === 'movie' || type === 'series' ? type : null;
+  const known: 'movie' | 'series' | null = type === 'movie' || type === 'series' ? type : null;
 
   if (resource === 'player') {
     if (!PLAYER_ACTIONS.includes(action)) return null;
