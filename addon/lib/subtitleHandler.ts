@@ -342,8 +342,8 @@ async function matchLeavesUnsent(parsedId: ParsedMediaId, config: any, service: 
 }
 
 async function movieTarget(parsedId: ParsedMediaId, config: any, service: TrackedService): Promise<Record<string, any> | null> {
-  const matched = await require('./jellyfin/trackerMatch').matchedTarget(config?.userUUID, service, baseOf(parsedId));
-  if (matched) return matched.ids;
+  const matched = await require('./jellyfin/trackerMatch').matchFor(config?.userUUID, service, baseOf(parsedId), 'movie');
+  if (matched) return { ...matched.target.ids };
   const ids = normalizeIdsForMovie(parsedId);
   return ids ? withTmdbId(ids, 'movie') : null;
 }

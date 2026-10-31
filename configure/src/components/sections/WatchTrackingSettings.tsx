@@ -30,6 +30,7 @@ import {
   scrobblesStremio,
   WATCH_TRACKING_SERVICE_DEFINITIONS,
   WATCH_TRACKING_SERVICES,
+  withStremioEventsSince,
 } from '@/lib/watchTracking';
 
 const MODE_KINDS = {
@@ -122,7 +123,7 @@ export function WatchTrackingSettings() {
               kind="scrobble"
               badge="Stremio, Jellyfin"
               text="Something abandoned after a few minutes is kept as a resume point rather than marked watched."
-              onSelect={() => setConfig(prev => ({ ...prev, playbackReporting: true }))}
+              onSelect={() => setConfig(prev => withStremioEventsSince(prev, { ...prev, playbackReporting: true }))}
             />
           </div>
           {config.playbackReporting ? (
@@ -132,7 +133,7 @@ export function WatchTrackingSettings() {
                 label="Stremio SDK"
                 hint="Plays, pauses and watched marks sent by Stremio. Each user installs their own link from Configuration."
                 checked={stremioOn}
-                onChange={(on) => setConfig(prev => ({ ...prev, stremioScrobbling: on, ...(on ? { stremioScrobblingSince: Date.now() } : {}) }))}
+                onChange={(on) => setConfig(prev => withStremioEventsSince(prev, { ...prev, stremioScrobbling: on }))}
               />
               {stremioOn ? (
                 <SwitchRow

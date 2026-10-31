@@ -473,9 +473,14 @@ async function writePlaystate(
 }
 
 // The table records every play; trackers hear these reports only when the switch for the play's source is on.
-function tellsTrackers(config: any, source: TrackerSource = 'jellyfin'): boolean {
+type EditSource = TrackerSource | 'dashboard';
+
+function tellsTrackers(config: any, source: EditSource = 'jellyfin'): boolean {
   const { writesTrackers } = require('./profiles');
-  return (source === 'stremio' ? scrobblesStremio(config) : scrobblesJellyfin(config)) && writesTrackers(config);
+  const on = source === 'dashboard'
+    ? scrobblesJellyfin(config) || scrobblesStremio(config)
+    : source === 'stremio' ? scrobblesStremio(config) : scrobblesJellyfin(config);
+  return on && writesTrackers(config);
 }
 
 async function report(
@@ -618,7 +623,7 @@ export async function recordStopped(req: any, body: any): Promise<void> {
 // the mark applies to each aired episode in it. The table is written for all
 // of them before this returns, since the client reads the item back straight
 // after and a half-marked season shows no tick; the trackers are told after.
-async function markEach(req: any, body: any, event: 'played' | 'unplayed', upTo = false): Promise<void> {
+async function markEach(req: any, body: any, event: 'played' | 'unplayed', upTo = false, source: EditSource = 'jellyfin'): Promise<void> {
   const userUUID = req.params?.userUUID;
   const itemId = bodyItemId(req, body);
   if (!userUUID || !itemId) return;
@@ -630,15 +635,15 @@ async function markEach(req: any, body: any, event: 'played' | 'unplayed', upTo 
   const { profileKey } = require('./profiles');
   const profile = profileKey(config);
 
-  await closeOpenSession(userUUID, config, profile, itemId, event === 'played', 'jellyfin');
+  await closeOpenSession(userUUID, config, profile, itemId, event === 'played', source);
 
   const marked = await markedItemIds(userUUID, itemId, upTo);
   if (upTo) marked.ids = await unplayedAmong(userUUID, config, profile, marked.ids);
-  await markItems(userUUID, config, profile, marked, event, 'jellyfin');
+  await markItems(userUUID, config, profile, marked, event, source);
 }
 
 // A mark on a title the server still holds as playing is the stop that never arrived.
-async function closeOpenSession(userUUID: string, config: any, profile: string, itemId: string, played: boolean, source: TrackerSource): Promise<boolean> {
+async function closeOpenSession(userUUID: string, config: any, profile: string, itemId: string, played: boolean, source: EditSource): Promise<boolean> {
   const open = await getPosition(`${userUUID}:${profile}:${itemId}`);
   if (!open || open.paused || !isPlayable(await decodeJellyfinId(itemId))) return false;
   const session = await resolveSession(userUUID, itemId);
@@ -660,7 +665,7 @@ async function markItems(
   profile: string,
   marked: MarkTarget,
   event: 'played' | 'unplayed',
-  source: TrackerSource
+  source: EditSource
 ): Promise<void> {
   const played = event === 'played';
   const itemId = marked.metaId ?? marked.ids[0];
@@ -797,6 +802,8 @@ export async function recordStremioPlay(userUUID: string, config: any, event: Pl
   if (event.durationMs <= 0) {
     if (event.action === 'start' && !known) {
       setPosition(key, { positionMs: event.positionMs, at: Date.now(), paused: true, viewer: config?.jellyfinProfileId ?? null, device: 'stremio', app: STREMIO_APP });
+    } else if (event.action === 'stop') {
+      deletePosition(key);
     }
     return;
   }
@@ -854,12 +861,12 @@ export async function recordStremioMark(userUUID: string, config: any, event: Li
   await markItems(userUUID, config, profile, marked, played ? 'played' : 'unplayed', 'stremio');
 }
 
-export async function recordPlayed(req: any, body: any): Promise<void> {
-  await markEach(req, body, 'played');
+export async function recordPlayed(req: any, body: any, source: EditSource = 'jellyfin'): Promise<void> {
+  await markEach(req, body, 'played', false, source);
 }
 
-export async function recordUnplayed(req: any, body: any): Promise<void> {
-  await markEach(req, body, 'unplayed');
+export async function recordUnplayed(req: any, body: any, source: EditSource = 'jellyfin'): Promise<void> {
+  await markEach(req, body, 'unplayed', false, source);
 }
 
 export async function recordWatchDate(req: any, itemId: string, from: number | null, to: number, merge = false): Promise<boolean> {
@@ -886,7 +893,7 @@ export async function recordWatchDate(req: any, itemId: string, from: number | n
   announce(userUUID, config, profile, session).catch((error: any) =>
     logger.debug(`User data push failed for ${session.videoId}: ${error?.message || error}`)
   );
-  if (from === null || !tellsTrackers(config)) return true;
+  if (from === null || !tellsTrackers(config, 'dashboard')) return true;
   const { enqueueTrackerWrites, hasCredential } = require('../trackerOutbox');
   const latest = session.descriptor.k === 'episode' && latestAfter !== latestBefore ? latestAfter : null;
   const services = ['mdblist', 'publicmetadb', ...(latest ? ['simkl'] : [])].filter((service) => hasCredential(config, service));
@@ -898,8 +905,8 @@ export async function recordWatchDate(req: any, itemId: string, from: number | n
 }
 
 /** The episode and every aired one before it in its series, specials left out. */
-export async function recordPlayedUpTo(req: any, itemId: string): Promise<void> {
-  await markEach(req, { ItemId: itemId }, 'played', true);
+export async function recordPlayedUpTo(req: any, itemId: string, source: EditSource = 'jellyfin'): Promise<void> {
+  await markEach(req, { ItemId: itemId }, 'played', true, source);
 }
 
 async function unplayedAmong(userUUID: string, config: any, profile: string, ids: string[]): Promise<string[]> {
@@ -998,7 +1005,7 @@ export async function recordProgress(req: any, body: any): Promise<void> {
  * played flag, or a resume position, which cleared is what drops the item from
  * continue watching. Answers the state the item is now in.
  */
-export async function recordUserData(req: any, body: any): Promise<{ played: boolean; positionMs: number; rating?: number | null } | null> {
+export async function recordUserData(req: any, body: any, source: EditSource = 'jellyfin'): Promise<{ played: boolean; positionMs: number; rating?: number | null } | null> {
   const userUUID = req.params?.userUUID;
   const itemId = bodyItemId(req, body);
   if (!userUUID || !itemId) return null;
@@ -1022,7 +1029,7 @@ export async function recordUserData(req: any, body: any): Promise<{ played: boo
 
   const played = body?.Played ?? body?.played;
   if (played === true || played === false) {
-    await markEach(req, { ItemId: itemId }, played ? 'played' : 'unplayed');
+    await markEach(req, { ItemId: itemId }, played ? 'played' : 'unplayed', false, source);
     return { played, positionMs: 0 };
   }
 
@@ -1056,7 +1063,7 @@ export async function recordUserData(req: any, body: any): Promise<{ played: boo
 
   // Cleared here means cleared on the trackers too, or their copy would come
   // back through the shelf on any device reading them directly.
-  if (positionMs === 0 && tellsTrackers(config)) {
+  if (positionMs === 0 && tellsTrackers(config, source)) {
     const { enqueueTrackerWrites, hasCredential } = require('../trackerOutbox');
     const services = (['simkl', 'mdblist', 'publicmetadb'] as const).filter((service) => hasCredential(config, service));
     await enqueueTrackerWrites(userUUID, config, services.map((service) => ({

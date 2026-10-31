@@ -3809,7 +3809,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
   });
   router.post('/AudioFingerprints/:itemId', async (req: any, res: any) => {
     const config = await loadConfig(req);
-    if (!config || !(await saveSeasonFingerprint(req.params.itemId, req.body, config))) {
+    if (!config || !(await saveSeasonFingerprint(req.params.itemId, req.body, config, String(req.params.userUUID)))) {
       res.status(400).json({ Message: 'An episode, a kind, StartMs and Points expected' });
       return;
     }

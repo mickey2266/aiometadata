@@ -37,7 +37,7 @@ export async function listSeasonFingerprints(itemId: unknown, kindValue: unknown
   return rows.map((row: any) => ({ Episode: Number(row.episode), StartMs: Number(row.start_ms), Points: String(row.points) }));
 }
 
-export async function saveSeasonFingerprint(itemId: unknown, body: any, config: any): Promise<boolean> {
+export async function saveSeasonFingerprint(itemId: unknown, body: any, config: any, contributor: string): Promise<boolean> {
   const kind = kindOf(body?.Kind);
   const startMs = Number(body?.StartMs);
   const points = typeof body?.Points === 'string' ? body.Points : '';
@@ -50,7 +50,7 @@ export async function saveSeasonFingerprint(itemId: unknown, body: any, config: 
   // The table is shared by every user, so a season takes new episodes only up to a size no real season reaches.
   const { held, count } = await database.fingerprintHeld(at.series, at.season, at.episode, kind);
   if (!held && count >= envInt('JELLYFIN_FINGERPRINT_SEASON_MAX', 3000, 1)) return false;
-  await database.saveFingerprint(at.series, at.season, at.episode, kind, startMs, points);
+  await database.saveFingerprint(at.series, at.season, at.episode, kind, startMs, points, contributor);
   const now = Date.now();
   if (now - prunedAt > PRUNE_EVERY_MS) {
     prunedAt = now;

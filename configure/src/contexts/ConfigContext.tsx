@@ -7,6 +7,7 @@ import { LoadingScreen } from "@/components/LoadingScreen";
 import { declaresStremioEvents, hasAnyWatchTrackingEnabled } from '@/lib/watchTracking';
 import { reconcileTagRegistry } from '@/lib/catalogShare';
 import { keepCollectionsInPlace } from '@shared/homeOrder';
+import type { CollectionDraft } from '@shared/types';
 
 interface AuthState {
   authenticated: boolean;
@@ -269,8 +270,8 @@ function getManifestFingerprint(config: AppConfig): string {
   const collectionCatalogs = !config.catalogModeOnly && config.collectionCatalogs !== false;
   const collections = collectionCatalogs
     ? (config.collections || [])
-        .filter((entry) => entry.kind === 'collection')
-        .map((entry) => ({ id: entry.id, title: entry.title }))
+        .filter((entry): entry is CollectionDraft => entry.kind === 'collection')
+        .map((entry) => ({ id: entry.id, title: entry.title, after: entry.after ? { id: entry.after.id, type: entry.after.type } : null }))
     : [];
 
   return JSON.stringify({
