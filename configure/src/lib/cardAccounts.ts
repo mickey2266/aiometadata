@@ -137,6 +137,7 @@ export function handoffNameClash(mainName: string, mainHandoff: string[] | undef
     }
     return null;
   };
+  for (const user of users) owners.set(user.id.trim().toLowerCase(), user.id);
   const first = claim('', [mainName, ...(mainHandoff ?? [])]);
   if (first) return first;
   for (const user of users) {
