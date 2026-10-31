@@ -1,5 +1,5 @@
 import type { AppConfig, WatchTrackingService } from '@/contexts/config';
-import type { SettingsSectionId } from '@/lib/settingsRoute';
+import { navigateToSettingsSection, requestIntegrationDialog, type IntegrationDialog, type SettingsSectionId } from './settingsRoute';
 
 export type WatchTrackingMediaType = 'movie' | 'series';
 type WatchTrackingMasterKey =
@@ -84,6 +84,20 @@ export function scrobblesJellyfin(config: AppConfig): boolean {
 
 export function scrobblesStremio(config: AppConfig): boolean {
   return config.playbackReporting === true && config.stremioScrobbling === true;
+}
+
+export type ConnectTarget = { section: SettingsSectionId; dialog?: IntegrationDialog; anchor?: string };
+
+/** Where a service is connected: its sign-in in Catalogs, or its key field in Integrations. */
+export function connectTargetFor(service: WatchTrackingService): ConnectTarget {
+  if (service === 'simkl' || service === 'anilist' || service === 'mal') return { section: 'catalogs', dialog: service };
+  return { section: 'integrations', anchor: service };
+}
+
+export function openServiceConnect(service: WatchTrackingService): void {
+  const target = connectTargetFor(service);
+  if (target.dialog) requestIntegrationDialog(target.dialog);
+  navigateToSettingsSection(target.section, target.anchor);
 }
 
 export function anyServiceConnected(config: AppConfig): boolean {

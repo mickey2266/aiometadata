@@ -44,7 +44,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { streamingServices, regions } from "@/data/streamings";
-import { consumeCollectionBuilderRequest } from '@/lib/settingsRoute';
+import { consumeCollectionBuilderRequest, consumeIntegrationDialogRequest, OPEN_INTEGRATION_EVENT, type IntegrationDialog } from '@/lib/settingsRoute';
 import { allCatalogDefinitions, isJikanCatalog } from '@/data/catalogs';
 import { resolveCatalogTTL, minCacheTTLFor, hasEditableCacheTTL, formatTTL } from '@/lib/catalogTTL';
 import { GenreSelection } from '@/data/genres';
@@ -4295,12 +4295,26 @@ function CatalogsSettingsContent({
   useEffect(() => {
     if (consumeCollectionBuilderRequest()) setIsCollectionBuilderOpen(true);
   }, []);
+
   const [editingDiscoverCatalog, setEditingDiscoverCatalog] = useState<CatalogConfig | null>(null);
   const [customizeTemplate, setCustomizeTemplate] = useState<CustomizeTemplate | null>(null);
   const [isLetterboxdOpen, setIsLetterboxdOpen] = useState(false);
   const [isTvdbListOpen, setIsTvdbListOpen] = useState(false);
   const [isAniListOpen, setIsAniListOpen] = useState(false);
   const [isMalOpen, setIsMalOpen] = useState(false);
+
+  // Connect on the Watch Tracking tab opens the service's sign-in here.
+  useEffect(() => {
+    const open = (service: IntegrationDialog | null) => {
+      if (service === 'simkl') setIsSimklOpen(true);
+      else if (service === 'anilist') setIsAniListOpen(true);
+      else if (service === 'mal') setIsMalOpen(true);
+    };
+    open(consumeIntegrationDialogRequest());
+    const onRequest = () => open(consumeIntegrationDialogRequest());
+    window.addEventListener(OPEN_INTEGRATION_EVENT, onRequest);
+    return () => window.removeEventListener(OPEN_INTEGRATION_EVENT, onRequest);
+  }, []);
   const [isCustomManifestOpen, setIsCustomManifestOpen] = useState(false);
   const [isStreamingTop10Open, setIsStreamingTop10Open] = useState(false);
   const [isAIOMetadataOpen, setIsAIOMetadataOpen] = useState(false);

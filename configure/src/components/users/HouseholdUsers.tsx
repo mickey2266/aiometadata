@@ -25,11 +25,10 @@ import { UserAccounts } from '@/components/jellyfin/UserAccounts';
 import { CARD_SERVICES, connectedServices, handoffNameClash, isHolder, pinInvalid, showsAlsoKnownAs, trackerOptionsFor, userBadge, watchlistOptionsFor, type UserBadge } from '@/lib/cardAccounts';
 import { disconnectCardAccount } from '@/lib/integrationCredentials';
 import { useJellyfinServer } from '@/hooks/useJellyfinServer';
-import { useStremioLinkStatus } from '@/hooks/useStremioLinkStatus';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { MoreText } from '@/components/settings/MoreText';
 import { navigateToSettingsSection } from '@/lib/settingsRoute';
-import { scrobblesStremio, stremioLinkState, WATCH_TRACKING_SERVICE_DEFINITIONS, WATCH_TRACKING_SERVICES, type StremioLinkState } from '@/lib/watchTracking';
+import { scrobblesStremio, WATCH_TRACKING_SERVICE_DEFINITIONS, WATCH_TRACKING_SERVICES } from '@/lib/watchTracking';
 
 const IMAGE_URL = /^https?:\/\//i;
 
@@ -135,8 +134,8 @@ interface UserRowProps {
   onToggle: () => void;
   /** The tracking accounts this user writes to, named on the closed card. */
   accounts: string[];
-  /** The state of this user's Stremio link, while Stremio SDK scrobbling is on. */
-  stremioState: StremioLinkState | null;
+  /** Stremio SDK scrobbling is on, so the user has an install link in Configuration. */
+  stremioOn: boolean;
   onChange: (patch: Partial<JellyfinUser>) => void;
   onRemove?: () => void;
   onForget?: () => void;
@@ -148,12 +147,6 @@ const BADGE_STYLES: Record<UserBadge, string> = {
   'Same person': 'border-sky-500/40 text-sky-400',
   'Own accounts': 'border-emerald-500/40 text-emerald-400',
   'Someone else': 'border-muted-foreground/30 text-muted-foreground',
-};
-
-const STREMIO_STATES: Record<StremioLinkState, { label: string; style: string }> = {
-  reinstall: { label: 'Stremio: reinstall', style: 'border-amber-500/40 text-amber-400' },
-  waiting: { label: 'Stremio: no playback yet', style: 'text-muted-foreground' },
-  ok: { label: 'Stremio: receiving', style: 'border-emerald-500/40 text-emerald-400' },
 };
 
 interface WatchedPoint {
@@ -246,7 +239,7 @@ function CardSection({ title, children }: { title: string; children: ReactNode }
   );
 }
 
-function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptions, watchlistOptions, hasPmdb, mainSkipSource, showHandoff, jellyfin, watchedPoint, open, onToggle, accounts, stremioState, onChange, onRemove, onForget, children }: UserRowProps) {
+function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptions, watchlistOptions, hasPmdb, mainSkipSource, showHandoff, jellyfin, watchedPoint, open, onToggle, accounts, stremioOn, onChange, onRemove, onForget, children }: UserRowProps) {
   const chosen = user?.tags ?? [];
   const toggleTag = (tag: string) =>
     onChange({ tags: chosen.includes(tag) ? chosen.filter((t) => t !== tag) : [...chosen, tag] });
@@ -280,9 +273,8 @@ function UserRow({ name, avatar, main, user, allTags, catalogCount, trackerOptio
           <span className={cn('rounded-full border px-2 py-0.5 text-[11px] font-medium', BADGE_STYLES[badge])}>{badge}</span>
           {accounts.length ? <span className="text-[11px] text-muted-foreground">{accounts.join(' · ')}</span> : null}
           <span className="text-[11px] text-muted-foreground">{chosen.length ? scope : 'All catalogs'}</span>
-          {stremioState ? <span className={cn('rounded-full border px-1.5 text-[11px]', STREMIO_STATES[stremioState].style)}>{STREMIO_STATES[stremioState].label}</span> : null}
         </button>
-        {stremioState ? (
+        {stremioOn ? (
           <Button variant="ghost" size="sm" className="hidden h-7 gap-1 text-xs sm:inline-flex" onClick={() => navigateToSettingsSection('configuration')}>
             Install link <ArrowRight className="h-3 w-3" />
           </Button>
@@ -691,9 +683,7 @@ export function HouseholdUsers() {
   }, [scrollTo]);
   const toggleCard = (key: string) => setOpenCard((current) => (current === key ? null : key));
 
-  const stremioStatus = useStremioLinkStatus(scrobblesStremio(config));
-  const stremioStateFor = (key: string): StremioLinkState | null =>
-    scrobblesStremio(config) ? stremioLinkState(config.stremioScrobblingSince, stremioStatus?.[key]) : null;
+  const stremioOn = scrobblesStremio(config);
   const mainAccounts = WATCH_TRACKING_SERVICES
     .filter((service) => WATCH_TRACKING_SERVICE_DEFINITIONS[service].hasCredential(config))
     .map((service) => WATCH_TRACKING_SERVICE_DEFINITIONS[service].label);
@@ -886,7 +876,7 @@ export function HouseholdUsers() {
         open={openCard === 'main'}
         onToggle={() => toggleCard('main')}
         accounts={mainAccounts}
-        stremioState={stremioStateFor('')}
+        stremioOn={stremioOn}
         onForget={canForget ? () => setForgetFor({ profile: null, name: mainName }) : undefined}
         onChange={(patch) => setConfig(prev => ({
           ...prev,
@@ -921,7 +911,7 @@ export function HouseholdUsers() {
             open={openCard === user.id}
             onToggle={() => toggleCard(user.id)}
             accounts={holder ? connectedServices(user).map((service) => CARD_SERVICES[service].label) : []}
-            stremioState={stremioStateFor(user.id)}
+            stremioOn={stremioOn}
             onChange={(patch) => updateUser(user.id, patch)}
             onRemove={() => { void removeUser(user); }}
             onForget={canForget ? () => setForgetFor({ profile: user.id, name: user.name }) : undefined}

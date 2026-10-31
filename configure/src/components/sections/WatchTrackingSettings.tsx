@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { CheckCircle2, CircleDashed, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -25,14 +25,13 @@ import { navigateToSettingsSection } from '@/lib/settingsRoute';
 import { cn } from '@/lib/utils';
 import {
   anyServiceConnected,
+  openServiceConnect,
   isWatchTrackingMediaTypeSelected,
   scrobblesJellyfin,
   scrobblesStremio,
-  stremioLinkState,
   WATCH_TRACKING_SERVICE_DEFINITIONS,
   WATCH_TRACKING_SERVICES,
 } from '@/lib/watchTracking';
-import { useStremioLinkStatus } from '@/hooks/useStremioLinkStatus';
 
 function ModeTile({ selected, title, badge, text, onSelect }: { selected: boolean; title: string; badge: string; text: string; onSelect: () => void }) {
   return (
@@ -56,17 +55,14 @@ function ModeTile({ selected, title, badge, text, onSelect }: { selected: boolea
   );
 }
 
-function SwitchRow({ id, label, hint, status, checked, onChange, nested }: { id: string; label: string; hint: string; status?: ReactNode; checked: boolean; onChange: (on: boolean) => void; nested?: boolean }) {
+function SwitchRow({ id, label, hint, checked, onChange, nested }: { id: string; label: string; hint: string; checked: boolean; onChange: (on: boolean) => void; nested?: boolean }) {
   return (
-    <div className={cn('flex flex-wrap items-center justify-between gap-x-4 gap-y-1 p-2 transition-colors hover:bg-accent/50', nested ? 'ml-3 rounded-r-lg border-l border-border pl-4' : 'rounded-lg')}>
-      <div className="min-w-[12rem] flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <Label htmlFor={id} className="font-medium">{label}</Label>
-          {status}
-        </div>
+    <div className={cn('flex items-center justify-between gap-4 py-3 pr-4', nested ? 'bg-muted/20 pl-10' : 'pl-4')}>
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <Label htmlFor={id} className="font-medium">{label}</Label>
         <MoreText text={hint} className="text-xs" />
       </div>
-      <Switch id={id} checked={checked} onCheckedChange={onChange} />
+      <Switch id={id} checked={checked} onCheckedChange={onChange} className="shrink-0" />
     </div>
   );
 }
@@ -77,8 +73,6 @@ export function WatchTrackingSettings() {
   const [connectPrompt, setConnectPrompt] = useState<WatchTrackingService | null>(null);
   const stremioOn = scrobblesStremio(config);
   const jellyfinOn = scrobblesJellyfin(config);
-  const stremioStatus = useStremioLinkStatus(stremioOn);
-  const stremioLabel = stremioStatus ? stremioLinkState(config.stremioScrobblingSince, stremioStatus['']) : null;
 
   const setMaster = (service: WatchTrackingService, on: boolean) => {
     const { masterKey, hasCredential } = WATCH_TRACKING_SERVICE_DEFINITIONS[service];
@@ -125,18 +119,11 @@ export function WatchTrackingSettings() {
             />
           </div>
           {config.playbackReporting ? (
-            <div className="space-y-1 rounded-lg border p-2">
+            <div className="divide-y overflow-hidden rounded-lg border">
               <SwitchRow
                 id="stremio-scrobbling"
                 label="Stremio SDK"
                 hint="Plays, pauses and watched marks Stremio sends to the addon. Each user installs their own link, listed in Configuration."
-                status={stremioOn && stremioLabel === 'reinstall'
-                  ? <span className="rounded-full border border-amber-500/40 px-1.5 text-[11px] text-amber-400">Reinstall required</span>
-                  : stremioOn && stremioLabel === 'waiting'
-                    ? <span className="rounded-full border px-1.5 text-[11px] text-muted-foreground">No playback yet</span>
-                    : stremioOn && stremioLabel === 'ok'
-                      ? <span className="rounded-full border border-emerald-500/40 px-1.5 text-[11px] text-emerald-400">Receiving</span>
-                      : null}
                 checked={stremioOn}
                 onChange={(on) => setConfig(prev => ({ ...prev, stremioScrobbling: on, ...(on ? { stremioScrobblingSince: Date.now() } : {}) }))}
               />
@@ -157,11 +144,9 @@ export function WatchTrackingSettings() {
                 checked={jellyfinOn}
                 onChange={(on) => setConfig(prev => ({ ...prev, jellyfinScrobbling: on }))}
               />
-              {!stremioOn && !jellyfinOn ? (
-                <p className="px-2 text-xs text-amber-400">Both are off, so nothing will be recorded.</p>
-              ) : (
-                <p className="px-2 text-xs text-muted-foreground">A client that reports neither way records nothing.</p>
-              )}
+              <p className={cn('bg-muted/20 px-4 py-2.5 text-xs', !stremioOn && !jellyfinOn ? 'text-amber-400' : 'text-muted-foreground')}>
+                {!stremioOn && !jellyfinOn ? 'Both are off, so nothing will be recorded.' : 'A client that reports neither way records nothing.'}
+              </p>
             </div>
           ) : null}
         </CardContent>
@@ -190,7 +175,7 @@ export function WatchTrackingSettings() {
                           type="button"
                           className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
                           title={definition.connectHint}
-                          onClick={() => navigateToSettingsSection(definition.connectSection)}
+                          onClick={() => openServiceConnect(service)}
                         >
                           <CircleDashed className="h-3 w-3" /> Not connected · <span className="underline underline-offset-2">Connect</span>
                         </button>
@@ -253,9 +238,9 @@ export function WatchTrackingSettings() {
                 <AlertDialogCancel>Later</AlertDialogCancel>
                 <AlertDialogAction
                   onClick={() => {
-                    const { connectSection } = WATCH_TRACKING_SERVICE_DEFINITIONS[connectPrompt];
+                    const service = connectPrompt;
                     setConnectPrompt(null);
-                    navigateToSettingsSection(connectSection);
+                    openServiceConnect(service);
                   }}
                 >
                   Take me there

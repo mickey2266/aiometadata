@@ -125,8 +125,8 @@ export function SettingsLayout() {
 
   useEffect(() => {
     const handleNavigate = (event: Event) => {
-      const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;
-      if (tab && isSettingsSectionId(tab)) navigate(tab);
+      const { tab, anchor } = (event as CustomEvent<{ tab?: string; anchor?: string }>).detail ?? {};
+      if (tab && isSettingsSectionId(tab)) navigate(tab, anchor ?? null);
     };
     window.addEventListener(SETTINGS_LAYOUT_NAVIGATE_EVENT, handleNavigate as EventListener);
     return () => window.removeEventListener(SETTINGS_LAYOUT_NAVIGATE_EVENT, handleNavigate as EventListener);
