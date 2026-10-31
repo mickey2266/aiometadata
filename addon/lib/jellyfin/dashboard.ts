@@ -1883,9 +1883,9 @@ export async function dashboardTitleAction(userUUID: string, profile: string | n
     // A watchlist or rating change that could not read its title says so; a drop that had nothing to change is no failure.
     let changed = true;
     for (const itemId of itemIds) {
-      if (action === 'played') await playstate.recordPlayed(req, { ItemId: itemId });
-      else if (action === 'unplayed') await playstate.recordUnplayed(req, { ItemId: itemId });
-      else if (action === 'playedUpTo') await playstate.recordPlayedUpTo(req, itemId);
+      if (action === 'played') await playstate.recordPlayed(req, { ItemId: itemId }, 'dashboard');
+      else if (action === 'unplayed') await playstate.recordUnplayed(req, { ItemId: itemId }, 'dashboard');
+      else if (action === 'playedUpTo') await playstate.recordPlayedUpTo(req, itemId, 'dashboard');
       else {
         const descriptor = await decodeJellyfinId(itemId);
         if (!descriptor) continue;
@@ -1916,7 +1916,7 @@ export async function dashboardClearResume(userUUID: string, profileKey: string,
   const { runInViewerScope } = require('./viewer');
   return runInViewerScope(false, async () => {
     const req = { params: { userUUID }, jellyfin: { userUUID, profileId: profileKey || null }, query: {}, headers: {} };
-    const done = await require('./playstate').recordUserData(req, { ItemId: itemIdForVideo(videoId), PlaybackPositionTicks: 0 });
+    const done = await require('./playstate').recordUserData(req, { ItemId: itemIdForVideo(videoId), PlaybackPositionTicks: 0 }, 'dashboard');
     forgetMemos(userUUID);
     return Boolean(done);
   });
