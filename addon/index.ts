@@ -5973,6 +5973,29 @@ addon.get("/stremio/:userUUID/watch_state/pull.json", async function (req, res) 
   }
 });
 
+// When each install link last fetched a manifest declaring the Stremio events, and last sent one.
+addon.post("/api/stremio/:userUUID/event-status", configLoadRateLimitMiddleware, async function (req, res) {
+  const userUUID = String(req.params.userUUID);
+  const password = req.body?.password;
+  try {
+    const accountId = req.session?.accountId;
+    const owns = Boolean(accountId) && (await database.ownsConfig(accountId, userUUID));
+    const verified = !owns && password ? await database.verifyUserAndGetConfig(userUUID, String(password)) : null;
+    if (!owns && !verified) {
+      return res.status(401).json({ error: 'Sign in or enter the configuration password to read the Stremio status' });
+    }
+    const config = verified ?? (await database.getUserConfig(userUUID).catch(() => null));
+    const { listProfiles } = require('./lib/jellyfin/profiles');
+    const { readStatus } = require('./lib/stremioEventStatus');
+    const links = await readStatus(userUUID, listProfiles(config, userUUID).map((profile) => profile.id ?? ''));
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ links });
+  } catch (error) {
+    consola.error(`[Stremio] Failed to read the event status for ${userUUID}: ${error.message}`);
+    return res.status(500).json({ error: "Failed to read the Stremio status" });
+  }
+});
+
 // --- Subtitle Route (for watch tracking) ---
 // Route pattern matches Stremio's subtitle URL format: /:id{/:extra}.json
 // where extra contains filename, videoSize, and videoHash parameters
