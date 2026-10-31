@@ -23,8 +23,12 @@ import type { WatchTrackingService } from '@/contexts/config';
 import { navigateToSettingsSection } from '@/lib/settingsRoute';
 import {
   getWatchTrackingMediaTypeSummary,
+  scrobblesJellyfin,
+  scrobblesStremio,
+  stremioLinkState,
   WATCH_TRACKING_SERVICE_DEFINITIONS,
 } from '@/lib/watchTracking';
+import { useStremioLinkStatus } from '@/hooks/useStremioLinkStatus';
 
 import { languageOptions } from '@/data/languages';
 import { ratingCountryCodes } from '@/data/ratingCountries';
@@ -104,6 +108,9 @@ export function GeneralSettings() {
   // Use our custom hook to get the current config and the function to update it
   const { config, setConfig } = useConfig();
   const [watchTrackingService, setWatchTrackingService] = useState<WatchTrackingService | null>(null);
+  const stremioOn = scrobblesStremio(config);
+  const stremioStatus = useStremioLinkStatus(stremioOn);
+  const stremioLabel = stremioStatus ? stremioLinkState(config.stremioScrobblingSince, stremioStatus['']) : null;
   const [connectPrompt, setConnectPrompt] = useState<WatchTrackingService | null>(null);
 
   // --- Handler Functions ---
@@ -429,9 +436,6 @@ export function GeneralSettings() {
               <div className="min-w-[12rem] flex-1">
                 <div className="flex items-center gap-2">
                   <Label htmlFor="playback-detection" className="font-medium">When to record</Label>
-                  {config.playbackReporting ? (
-                    <Badge variant="outline" className="text-[10px] border-amber-400/60 text-amber-400">Jellyfin only</Badge>
-                  ) : null}
                 </div>
                 <p className="text-sm text-muted-foreground">
                   Applies to every service below.
@@ -454,16 +458,63 @@ export function GeneralSettings() {
                   <SelectItem value="reported">
                     <span className="flex items-center gap-2">
                       When playback starts and stops
-                      <Badge variant="secondary" className="text-[10px]">Jellyfin only</Badge>
+                      <Badge variant="secondary" className="text-[10px]">Stremio, Jellyfin</Badge>
                     </span>
                   </SelectItem>
                 </SelectContent>
               </Select>
             </div>
             {config.playbackReporting ? (
-              <p className="text-xs text-muted-foreground">
-                Only a client that reports playback can drive this, which today means Jellyfin ones. In exchange, something you abandon after a few minutes is kept as a resume point rather than being marked watched, and a client that asks can read back what your trackers hold, so its Continue Watching reflects other devices. A favourite set in the client goes to your watchlist, and disliking a show marks it dropped. <span className="text-amber-400">Watching anywhere else, Stremio included, records nothing at all.</span>
-              </p>
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Recorded from what the client reports: something you abandon after a few minutes is kept as a resume point rather than being marked watched. <span className="text-amber-400">A client that reports neither way below records nothing.</span>
+                </p>
+                <div className="space-y-1 pt-1">
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-lg p-2 hover:bg-accent/50 transition-colors">
+                    <div className="min-w-[12rem] flex-1">
+                      <Label htmlFor="stremio-scrobbling" className="font-medium">Stremio SDK</Label>
+                      <p className="text-xs text-muted-foreground">Plays, pauses and watched marks Stremio sends to the addon.</p>
+                      {stremioOn && stremioLabel === 'reinstall' ? (
+                        <p className="text-xs text-amber-400">Reinstall required</p>
+                      ) : stremioOn && stremioLabel === 'waiting' ? (
+                        <p className="text-xs text-muted-foreground">No playback from Stremio yet</p>
+                      ) : null}
+                    </div>
+                    <Switch
+                      id="stremio-scrobbling"
+                      checked={stremioOn}
+                      onCheckedChange={(on) => setConfig(prev => ({ ...prev, stremioScrobbling: on, ...(on ? { stremioScrobblingSince: Date.now() } : {}) }))}
+                    />
+                  </div>
+                  {stremioOn ? (
+                    <div className="ml-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-r-lg border-l border-border p-2 pl-4 hover:bg-accent/50 transition-colors">
+                      <div className="min-w-[12rem] flex-1">
+                        <Label htmlFor="stremio-library-watchlist" className="font-medium">Sync Stremio library with watchlists</Label>
+                        <p className="text-xs text-muted-foreground">Adding a title to your Stremio library adds it to your watchlists; removing it removes it.</p>
+                      </div>
+                      <Switch
+                        id="stremio-library-watchlist"
+                        checked={config.stremioLibraryWatchlist === true}
+                        onCheckedChange={(on) => setConfig(prev => ({ ...prev, stremioLibraryWatchlist: on }))}
+                      />
+                    </div>
+                  ) : null}
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-lg p-2 hover:bg-accent/50 transition-colors">
+                    <div className="min-w-[12rem] flex-1">
+                      <Label htmlFor="jellyfin-scrobbling" className="font-medium">Jellyfin</Label>
+                      <p className="text-xs text-muted-foreground">This addon's Jellyfin server and AIOStreams' Jellyfin server. A favourite goes to your watchlist, and disliking a show marks it dropped.</p>
+                    </div>
+                    <Switch
+                      id="jellyfin-scrobbling"
+                      checked={scrobblesJellyfin(config)}
+                      onCheckedChange={(on) => setConfig(prev => ({ ...prev, jellyfinScrobbling: on }))}
+                    />
+                  </div>
+                  {!stremioOn && !scrobblesJellyfin(config) ? (
+                    <p className="px-2 text-xs text-muted-foreground">Nothing will be recorded.</p>
+                  ) : null}
+                </div>
+              </>
             ) : (
               <p className="text-xs text-muted-foreground">
                 Recorded as soon as you open a title, which is the only signal most clients give. Simple and works everywhere, but anything you open counts as watched even if you stop a minute in.

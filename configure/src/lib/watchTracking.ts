@@ -78,6 +78,32 @@ export const WATCH_TRACKING_SERVICE_DEFINITIONS: Record<
   },
 };
 
+export function scrobblesJellyfin(config: AppConfig): boolean {
+  return config.playbackReporting === true && config.jellyfinScrobbling !== false;
+}
+
+export function scrobblesStremio(config: AppConfig): boolean {
+  return config.playbackReporting === true && config.stremioScrobbling === true;
+}
+
+export type StremioLinkState = 'reinstall' | 'waiting' | 'ok';
+
+export function stremioLinkState(
+  since: number | undefined,
+  status?: { manifestAt: number | null; eventAt: number | null },
+): StremioLinkState {
+  const from = since ?? 0;
+  if (status?.eventAt && status.eventAt >= from) return 'ok';
+  if (status?.manifestAt && status.manifestAt >= from) return 'waiting';
+  return 'reinstall';
+}
+
+export function withViewer(installUrl: string, cardId: string): string {
+  const url = new URL(installUrl);
+  url.searchParams.set('viewer', cardId);
+  return url.toString();
+}
+
 export function isWatchTrackingMediaTypeSelected(
   config: AppConfig,
   service: WatchTrackingService,

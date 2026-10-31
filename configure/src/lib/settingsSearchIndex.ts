@@ -75,6 +75,18 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['rpdb', 'poster', 'rating', 'library'],
   },
   {
+    id: 'general.stremioScrobbling', section: 'general', anchor: 'stremio-scrobbling',
+    label: 'Stremio SDK Scrobbling',
+    description: 'Record plays, pauses and watched marks Stremio sends to the addon.',
+    keywords: ['scrobble', 'stremio', 'playback', 'watched', 'library', 'watchlist'],
+  },
+  {
+    id: 'general.jellyfinScrobbling', section: 'general', anchor: 'jellyfin-scrobbling',
+    label: 'Jellyfin Scrobbling',
+    description: 'Record plays reported by this addon\'s Jellyfin server and AIOStreams\' Jellyfin server.',
+    keywords: ['scrobble', 'jellyfin', 'playback', 'aiostreams'],
+  },
+  {
     id: 'general.simklWatchTracking', section: 'general', anchor: 'simkl-watch-tracking',
     label: 'Simkl Checkin',
     description: 'Automatically sync your watch progress to external services when you play content.',
