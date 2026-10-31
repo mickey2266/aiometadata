@@ -278,7 +278,7 @@ export function WatchTrackingSettings() {
         <CardHeader>
           <CardTitle>Users</CardTitle>
           <CardDescription>
-            Everyone watching on this configuration. Your own card comes first. Each user gets their own install link for Stremio under Configuration, and appears on the sign-in screen of this addon's Jellyfin server. A user is made of the tags picked for it: it sees the catalogs carrying any of them, under their rating limit. Tags themselves are made in Catalogs.
+            Everyone watching on this configuration. Your own card comes first. Each user gets their own install link for Stremio under Configuration, and appears on the sign-in screen of this addon's Jellyfin server. A user is made of the tags picked for it: it sees the catalogs carrying any of them, under their rating limit. Someone else gets their own watch history and Continue Watching; a user that is you shares yours. Tags themselves are made in Catalogs.
           </CardDescription>
         </CardHeader>
         <CardContent>
