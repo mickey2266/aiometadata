@@ -6,6 +6,7 @@ import { dashedGuid, decodeJellyfinId, encodeJellyfinId, normaliseJellyfinId, pa
 import { mapWithConcurrency } from '../../utils/concurrency';
 import { fetchMeta } from './items';
 import { upsertPlaystateEverywhere } from './aliases';
+import { scrobblesJellyfin, scrobblesStremio, type TrackerSource } from '../watchTracking';
 
 const logger = consola.withTag('JellyfinPlaystate');
 
@@ -469,10 +470,10 @@ async function writePlaystate(
   }
 }
 
-// The table records every play; trackers hear these reports only in playback mode.
-function tellsTrackers(config: any): boolean {
+// The table records every play; trackers hear these reports only when the switch for the play's source is on.
+function tellsTrackers(config: any, source: TrackerSource = 'jellyfin'): boolean {
   const { writesTrackers } = require('./profiles');
-  return Boolean(config?.playbackReporting) && writesTrackers(config);
+  return (source === 'stremio' ? scrobblesStremio(config) : scrobblesJellyfin(config)) && writesTrackers(config);
 }
 
 async function report(

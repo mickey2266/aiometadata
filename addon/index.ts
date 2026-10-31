@@ -67,7 +67,7 @@ const {
   verifyTraktOAuthState,
 } = require('./lib/oauthState');
 const { renderOAuthPage, escapeHtml } = require('./lib/oauthPage');
-const { hasAnyWatchTrackingEnabled } = require('./lib/watchTracking');
+const { hasAnyWatchTrackingEnabled, scrobblesJellyfin } = require('./lib/watchTracking');
 const simklAuth = require('./lib/simkl');
 const { SimklClient } = simklAuth;
 const {
@@ -5915,7 +5915,7 @@ addon.post(["/stremio/:userUUID/watch_state/push/:type/:id.json", "/stremio/:use
     return res.status(404).json({ error: "User configuration not found" });
   }
 
-  if (!config.playbackReporting) {
+  if (!scrobblesJellyfin(config)) {
     consola.debug(`[Playback] Reporting is off for ${userUUID}, dropping ${type}/${id}`);
     return res.status(404).json({ error: "Playback reporting is not enabled" });
   }
@@ -5951,7 +5951,7 @@ addon.get("/stremio/:userUUID/watch_state/pull.json", async function (req, res) 
   } catch {
     config = null;
   }
-  if (!config || !config.playbackReporting) {
+  if (!config || !scrobblesJellyfin(config)) {
     return res.status(404).json({ error: "Watch state is not enabled" });
   }
 
