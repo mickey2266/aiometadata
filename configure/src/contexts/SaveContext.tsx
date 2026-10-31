@@ -11,6 +11,7 @@ import { ManagerSync } from "@/components/ManagerSync";
 import { Switch } from "@/components/ui/switch";
 import { missingRequiredKeys, type KeyStatus } from "@/lib/configStatus";
 import { navigateToSettingsSection } from "@/lib/settingsRoute";
+import { householdIssue } from "@/lib/cardAccounts";
 
 const LazyInstallDialog = lazy(() =>
   import("@/components/InstallDialog").then((module) => ({ default: module.InstallDialog }))
@@ -32,6 +33,8 @@ interface SaveContextType {
   isDirty: boolean | null;
   canSave: boolean;
   missingKeys: KeyStatus[];
+  /** Why the people set up in the configuration stop it being saved, or null. */
+  saveBlockedBy: string | null;
   /** Opens the install dialog and rebaselines the manifest. */
   openInstall: (manifestUrl?: string) => void;
   installUrl: string;
@@ -119,7 +122,8 @@ export function SaveProvider({ children }: { children: ReactNode }) {
     () => (contextLoading ? [] : missingRequiredKeys(config, caps)),
     [config, hasBuiltInTmdb, hasBuiltInTvdb, hasBuiltInGemini, contextLoading] // eslint-disable-line react-hooks/exhaustive-deps
   );
-  const canSave = !contextLoading && missingKeys.length === 0;
+  const saveBlockedBy = useMemo(() => householdIssue(config, auth.userUUID ?? ''), [config, auth.userUUID]);
+  const canSave = !contextLoading && missingKeys.length === 0 && saveBlockedBy === null;
 
   useEffect(() => {
     fetch("/api/config/addon-info")
@@ -341,6 +345,7 @@ export function SaveProvider({ children }: { children: ReactNode }) {
     markConfigPersisted,
     canSave,
     missingKeys,
+    saveBlockedBy,
     openInstall,
     installUrl: defaultInstallUrl,
   };

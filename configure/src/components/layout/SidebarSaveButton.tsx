@@ -8,12 +8,14 @@ import { cn } from '@/lib/utils';
  * long enough that save has to stay reachable without returning to the top.
  */
 export function SidebarSaveButton() {
-  const { requestSave, isSaving, isDirty, canSave, missingKeys } = useSave();
+  const { requestSave, isSaving, isDirty, canSave, missingKeys, saveBlockedBy } = useSave();
 
   const blocked = !canSave && missingKeys.length > 0;
   const title = blocked
     ? `Missing required API keys: ${missingKeys.map(k => k.name).join(', ')}`
-    : isDirty
+    : saveBlockedBy
+      ? saveBlockedBy
+      : isDirty
       ? 'Save your unsaved changes'
       : 'Save configuration';
 
@@ -38,11 +40,13 @@ export function SidebarSaveButton() {
       <p
         className={cn(
           'mt-2 text-center text-[11px] leading-tight',
-          blocked ? 'text-amber-400/80' : 'text-muted-foreground'
+          blocked || saveBlockedBy ? 'text-amber-400/80' : 'text-muted-foreground'
         )}
       >
         {blocked
           ? `Missing ${missingKeys.length} required key${missingKeys.length === 1 ? '' : 's'}`
+          : saveBlockedBy
+            ? saveBlockedBy
           : isDirty
             ? 'You have unsaved changes'
             : isDirty === null

@@ -16,6 +16,7 @@ import { AGE_RATING_ORDER } from "@/lib/ageRatings";
 import type { TagDef } from "@/contexts/config";
 import { ManagerSync } from "@/components/ManagerSync";
 import { JellyfinDialog } from "@/components/JellyfinDialog";
+import { InstallLinks } from "@/components/users/InstallLinks";
 import { cn } from "@/lib/utils";
 import { keyStatuses } from "@/lib/configStatus";
 import { Callout } from "@/components/settings/Callout";
@@ -606,6 +607,7 @@ export function ConfigurationManager() {
                 )}
               </div>
             </div>
+            <InstallLinks userUUID={identity.userUUID} installUrl={identity.installUrl} />
             <Callout variant="info">
               <strong>Important:</strong> Save your UUID and password. You'll need both to access your configuration later.
             </Callout>

@@ -37,13 +37,13 @@ A sign-in lasts until the client goes thirty days without using it (`JELLYFIN_TO
 
 ## Users
 
-The server shows a list of users on the sign-in screen, the way a household's Jellyfin does. The first user is you. Any further user is a card in the dialog, and a user is made of:
+The server shows a list of users on the sign-in screen, the way a household's Jellyfin does. The first user is you. Any further user is a card under **Users** in the **Watch Tracking** tab, the same cards that give each Stremio profile its own install link, and a user is made of:
 
 ![Two user cards: your own, and an anime user marked as the same person as you](images/jellyfin/users.jpg)
 
 - **Tags.** The catalogs, collections and search catalogs the user sees are the ones carrying any of the user's tags. Tags themselves are made in **Catalogs**; a tag with a content rating caps what the user can open. A user with no tags sees everything.
 - **Same person as you.** On, the user is you on another set of catalogs: shares your Continue Watching and watched marks, and what they play is written to your trackers. Off, the user is someone else, with their own Continue Watching, watched marks and watchlist kept apart from yours; nothing they play or favourite reaches your trackers. What they read from your trackers is their card's **Trackers** pick, so a user who should see your history without writing to it is one with the switch off and the pick left on Automatic.
-- **Accounts.** A user who is someone else can connect their own Simkl, MDBList, PublicMetaDB, AniList and MyAnimeList. Once any is connected, everything they play, mark, drop or heart goes to those accounts alone, their shelves read from them, and your trackers are neither read nor written for them. Each account has its own **Watch tracking** switch and **Movies** and **Series** filters; **When to record** in **General** applies to everyone. Simkl can be connected with a PIN typed on the user's own phone. The switch above can't be turned on while accounts are connected.
+- **Accounts.** A user who is someone else can connect their own Simkl, MDBList, PublicMetaDB, AniList and MyAnimeList. Once any is connected, everything they play, mark, drop or heart goes to those accounts alone, their shelves read from them, and your trackers are neither read nor written for them. Each account has its own **Watch tracking** switch and **Movies** and **Series** filters; **When to record** in **Watch Tracking** applies to everyone. Simkl can be connected with a PIN typed on the user's own phone. The switch above can't be turned on while accounts are connected.
 - **Trackers**, **Watchlist** and **Skip intro and credits**, explained in the sections below. Each card carries its own copies, so a user who is you can still read a different watchlist shelf or a different skip source.
 - **Picture.** Click the avatar to set an image URL.
 
@@ -132,7 +132,7 @@ The table records every play and every watched mark whatever **When to record** 
 A tracker records a play only when all three hold:
 
 1. the service is connected under **Integrations**;
-2. its switch under **Watch Tracking** in **General** is on, the media type is one the service's options include, and **When to record** in the same section is set to **When playback starts and stops**, with **Jellyfin** on;
+2. its switch in the **Watch Tracking** tab is on, the media type is one the service's options include, and **When to record** in the same section is set to **When playback starts and stops**, with **Jellyfin** on;
 3. the play went through a server that reports playback: this addon's Jellyfin server, or AIOStreams' with the handoff described further down.
 
 Plays from Stremio are recorded in this table too, under their own switch; see [Stremio](#stremio).
@@ -216,7 +216,7 @@ The watchlist is the client's favourites. Marking a title favourite adds it to t
 
 ## AIOMetadata inside AIOStreams' Jellyfin server
 
-AIOStreams has a Jellyfin server of its own. In that setup the client signs in to AIOStreams, not to this addon, and AIOMetadata is one of the addons installed in it, supplying the catalogs and title pages. Nothing in this guide's sign-in, users or shelves sections applies then; AIOStreams builds those. What AIOMetadata still does is the tracking, through two resources it declares in its manifest once **When to record** under **General** is set to **When playback starts and stops**, with **Jellyfin** on:
+AIOStreams has a Jellyfin server of its own. In that setup the client signs in to AIOStreams, not to this addon, and AIOMetadata is one of the addons installed in it, supplying the catalogs and title pages. Nothing in this guide's sign-in, users or shelves sections applies then; AIOStreams builds those. What AIOMetadata still does is the tracking, through two resources it declares in its manifest once **When to record** in the **Watch Tracking** tab is set to **When playback starts and stops**, with **Jellyfin** on:
 
 - **playback.** AIOStreams sends the plays its clients report as start, stop, mark-played and mark-unplayed events, with the title known under every id it holds, so a show keyed on MyAnimeList with episodes keyed on Kitsu is still recorded once. A stop past the trackers' 80 percent counts as a watch; an earlier one is a resume point. Each event is reported to every tracker with watch tracking on, the same way a play through this addon's own server is. A repeated event within `PLAYBACK_MARK_REPEAT_WINDOW` is an echo and dropped.
 - **watch_state.** AIOStreams reads back what the trackers and this addon hold, so its Continue Watching reflects other devices. The answer is the same merged view this addon's own resume shelf uses, following the **Trackers** pick, newest first, `WATCH_STATE_PULL_ITEMS` titles at a time, and may be reused for `WATCH_STATE_PULL_TTL` seconds before AIOStreams asks again.
@@ -242,7 +242,7 @@ Stremio sends add-ons the plays, pauses and stops of its player, and the watched
 - **Reinstall once.** Stremio keeps the manifest it installed and does not refresh it for third-party add-ons, so it sends nothing until the addon is reinstalled after the switch is turned on. Saving raises the reinstall prompt, and the switch shows **Reinstall required** until a manifest declaring the events has been fetched, then **No playback from Stremio yet** until the first event arrives.
 - **Watched.** A stop at or past the user's watched point (`JELLYFIN_PLAYED_THRESHOLD`, 80 unless changed for the user) counts as a watch; an earlier one keeps the position as a resume point. Stremio ticks a title at 70 percent itself, so a stop between the two shows watched in Stremio and as a resume point on the trackers. A season or a whole series marked in Stremio is recorded as one mark.
 - **Library.** With **Sync Stremio library with watchlists** on, adding a title to the Stremio library adds it to the user's watchlist here and on their trackers, and removing it removes it. Titles Stremio keeps only because they were played are not part of this.
-- **Several people.** Each Stremio profile picks its own add-ons, so each installs its own link. Your own profile uses the plain install link; for a user card, use **Install in Stremio** on the card, which adds `?viewer=` with the card's id. That profile's plays then go to that user's table and accounts, and its catalogs follow the user, as on this addon's own server. A link naming a card that no longer exists is refused, so its plays never land on yours.
+- **Several people.** Each Stremio profile picks its own add-ons, so each installs its own link. Your own profile uses the plain install link; for a user card, use that user's link under **Stremio install links** in **Configuration**, which adds `?viewer=` with the card's id. That profile's plays then go to that user's table and accounts, and its catalogs follow the user, as on this addon's own server. A link naming a card that no longer exists is refused, so its plays never land on yours.
 - **Repeats.** Two installs of the same configuration in one profile both receive every event; a repeat of the last event for the same title within `STREMIO_EVENT_DEDUPE_SECONDS` (60) is dropped.
 
 **When a title is opened** stays available for clients that report neither way: they ask the addon for subtitles when a title opens, and that request is recorded as a watch.
@@ -339,7 +339,7 @@ Clients differ in what they ask for, and a few things are worth knowing when a r
 
 **A client says the server is unavailable right after signing in.** Usually a tracker read that failed while building the first shelves. The log, filtered by the configuration id, names the tracker and the status: `401` is a wrong or revoked key or token, `429` is the tracker's rate limit, and both are retried on the next request.
 
-**A play was not recorded on one tracker.** Check the three conditions under [What the server records](#what-the-server-records): the service must be connected, its switch under **Watch Tracking** in **General** must be on for that media type, and the play must have gone through this server or AIOStreams' handoff. A tracker that was connected after the play, or whose switch is off, has no way to hear about it; the log filtered by the configuration id shows each event as it arrives and any tracker that refused it. A user that is not you writes only to accounts connected on their own card.
+**A play was not recorded on one tracker.** Check the three conditions under [What the server records](#what-the-server-records): the service must be connected, its switch in the **Watch Tracking** tab must be on for that media type, and the play must have gone through this server or AIOStreams' handoff. A tracker that was connected after the play, or whose switch is off, has no way to hear about it; the log filtered by the configuration id shows each event as it arrives and any tracker that refused it. A user that is not you writes only to accounts connected on their own card.
 
 **AIOStreams plays are refused with "Unknown viewer".** AIOStreams named a user this configuration does not have. Add a user with that name, or add the name under **Also known as (AIOStreams and other apps)** on the right card, and save.
 
