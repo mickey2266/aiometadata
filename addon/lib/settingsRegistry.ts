@@ -2019,6 +2019,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     default: 'infuse',
   },
   {
+    key: 'JELLYFIN_LISTED_SOURCES_OMIT_CLIENTS',
+    envVar: 'JELLYFIN_LISTED_SOURCES_OMIT_CLIENTS',
+    label: 'Jellyfin Clients Without Listed Versions',
+    description: 'Comma-separated client names, matched against the client name and user agent, that get no versions on titles in a list (a season\'s episodes, a library, Next Up), only on a title opened on its own, where they are resolved before it is answered. For a client such as SenPlayer that keeps the first versions it sees, so it keeps the real ones rather than the placeholders. Its cache has to be cleared once for titles it already holds.',
+    category: 'Features',
+    type: 'string',
+    default: 'senplayer',
+  },
+  {
     key: 'JELLYFIN_RASTER_LOGO_CLIENTS',
     envVar: 'JELLYFIN_RASTER_LOGO_CLIENTS',
     label: 'Jellyfin PNG Logo Clients',

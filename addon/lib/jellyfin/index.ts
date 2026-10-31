@@ -547,7 +547,20 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       if (!res.get('Content-Type')) res.set('Content-Type', 'application/json');
       return res.send(JSON.stringify(body, jsonReplacer(appleTv)));
     };
-    res.json = (body: any) => {
+    res.json = (input: any) => {
+      // A client that keeps the first versions it sees, and builds its picker from a
+      // listing, is sent none there, so the first it keeps are the item's own, resolved
+      // when it is opened. Items are copied: a listing can be cut from a held shelf.
+      const body = Array.isArray(input?.Items) && clientListed(req, 'JELLYFIN_LISTED_SOURCES_OMIT_CLIENTS')
+        ? {
+            ...input,
+            Items: input.Items.map((item: any) => {
+              if (!item || typeof item !== 'object' || !('MediaSources' in item)) return item;
+              const { MediaSources: _sources, ...rest } = item;
+              return rest;
+            }),
+          }
+        : input;
       const rating = res.statusCode < 300 ? withCriticRatings(body, oneIdAsked(req.query)) : null;
       if (!rating) return send(body);
       rating.then(() => send(body), () => send(body));
