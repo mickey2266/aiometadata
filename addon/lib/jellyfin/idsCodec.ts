@@ -9,7 +9,7 @@ const NONE16 = 0xffff;
 const MAX48 = 2 ** 48 - 1;
 
 export type PackableKind = 'movie' | 'series' | 'season' | 'episode';
-export type HashedKind = 'view' | 'genre' | 'person' | 'studio' | 'collection' | 'boxset' | 'marker' | 'playlist' | 'playlists';
+export type HashedKind = 'view' | 'genre' | 'person' | 'studio' | 'collection' | 'boxset' | 'marker' | 'playlist' | 'playlists' | 'livetv' | 'channel' | 'program';
 export type JellyfinKind = PackableKind | HashedKind;
 
 export type Descriptor =
@@ -27,7 +27,11 @@ export type Descriptor =
   | { k: 'marker'; i: string }
   /** A user's playlist, and the folder that lists them. */
   | { k: 'playlist'; p: string }
-  | { k: 'playlists' };
+  | { k: 'playlists' }
+  /** The Live TV library, a live channel (`t` is its catalog's type), and one airing of a programme on it (epoch ms). */
+  | { k: 'livetv' }
+  | { k: 'channel'; t: string; i: string }
+  | { k: 'program'; t: string; i: string; at: number; to: number };
 
 const KIND_CODES: Record<PackableKind, number> = {
   movie: 1,
@@ -269,6 +273,12 @@ export function canonicalDescriptor(d: Descriptor): string {
       return `playlist|${d.p}`;
     case 'playlists':
       return 'playlists';
+    case 'livetv':
+      return 'livetv';
+    case 'channel':
+      return `channel|${d.t}|${d.i}`;
+    case 'program':
+      return `program|${d.t}|${d.i}|${d.at}|${d.to}`;
   }
 }
 
@@ -320,6 +330,19 @@ export function isHashedJellyfinId(id: string): boolean {
 
 export function isPackedJellyfinId(id: string): boolean {
   return normaliseJellyfinId(id).slice(0, 2) === PACKED.toString(16);
+}
+
+/**
+ * Live TV: the library, a channel or a programme. These are shown as the stream addon
+ * lists them, never enriched, and never recorded as watched here or on a tracker.
+ */
+export function isLiveTvDescriptor(d: Descriptor | null | undefined): boolean {
+  return d?.k === 'livetv' || d?.k === 'channel' || d?.k === 'program';
+}
+
+/** The Stremio types a live channel is listed under, which no tracker has a use for. */
+export function isLiveTvType(type: unknown): boolean {
+  return type === 'tv' || type === 'channel';
 }
 
 /**

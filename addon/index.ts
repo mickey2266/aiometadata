@@ -5991,6 +5991,11 @@ addon.get("/stremio/:userUUID/subtitles/:type/:id{/:extra}.json", async function
       return respond(req, res, { subtitles: [] }, { cacheMaxAge: 0 });
     }
     
+    if (type === 'tv' || type === 'channel') {
+      consola.debug(`[Watch Tracking] Not tracking live TV ${type}/${id}`);
+      return respond(req, res, { subtitles: [] }, { cacheMaxAge: 0 });
+    }
+
     if (hasAnyWatchTrackingEnabled(config)) {
       // Import and call subtitle handler
       const { handleSubtitleRequest } = require('./lib/subtitleHandler');

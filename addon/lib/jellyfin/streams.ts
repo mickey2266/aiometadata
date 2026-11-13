@@ -249,7 +249,9 @@ function requestHeadersOf(stream: any): Record<string, string> | null {
   return entries.length ? Object.fromEntries(entries) : null;
 }
 
-export function toPlayable(stream: any, allowHeaders = false): PlayableStream | null {
+// A scope keeps ids apart where the streams read alike: every channel of a live
+// provider offers the same "Xtream / HLS" entries, so the entry alone names no channel.
+export function toPlayable(stream: any, allowHeaders = false, scope?: string): PlayableStream | null {
   if (!stream || typeof stream.url !== 'string' || !stream.url) return null;
   const headers = needsHeaders(stream);
   if (headers && !allowHeaders) return null;
@@ -259,7 +261,8 @@ export function toPlayable(stream: any, allowHeaders = false): PlayableStream | 
     .join('\n');
 
   const size = Number(stream?.behaviorHints?.videoSize);
-  const id = mediaSourceIdFor(stream);
+  const own = mediaSourceIdFor(stream);
+  const id = scope ? createHash('md5').update(`${scope}\u0000${own}`).digest('hex') : own;
   const filename = String(stream?.behaviorHints?.filename || '');
   const durationMs = Number.isFinite(Number(stream?.streamData?.duration)) && Number(stream.streamData.duration) > 0 ? Number(stream.streamData.duration) : null;
   rememberIssued(id, stream.url, durationMs);

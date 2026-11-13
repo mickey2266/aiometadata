@@ -147,7 +147,10 @@ export async function buildViews(
     if (folders.length) collections.push({ id: collection.id, view: collectionView(serverId, collection, folders.length) });
   }
   const placed = placeCollections(config, catalogs, (catalog) => configCatalogFor(config, catalog), collections, (collection) => collection.id);
-  return placed.map((slot) => ('view' in slot ? slot.view : catalogView(slot, serverId, rowFor(config, slot))));
+  const views = placed.map((slot) => ('view' in slot ? slot.view : catalogView(slot, serverId, rowFor(config, slot))));
+  // Live TV is read from the stream addon, so it is one library of its own, after the rest.
+  const live = await require('./livetv').liveTvView(config, serverId).catch(() => null);
+  return live ? [...views, live] : views;
 }
 
 export async function findCatalogByViewId(

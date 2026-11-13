@@ -32,7 +32,7 @@ import { buildViews, catalogView, collectionTypeFor, findCatalogByViewId, getCat
 import { decodeJellyfinId } from './ids';
 import { artTag, imageTag, isWideTag } from './imageTags';
 import { ANIME_TAG, buildEpisodes, buildSeasons, withSeasonAnimeIds, fetchCatalogPage, fetchMeta, fetchWindow, servedOrder, filterByIncludeTypes, hasWantedTag, isAnimeCatalogType, sortItems, wantedTags, includeTypesFilter, listFilterKey, officialRatingOf, buildEpisode, findEpisodeVideo, knownCatalogLength, metaToBaseItem, pageChildren, pageEpisodes, recallArt, recallImages, rememberArt, rememberImages, sortNameFor, warmCatalogLengths, isLandscapeCatalog, showLandscape } from './items';
-import { dashedGuid, encodeJellyfinId, normaliseJellyfinId, parseStremioId, stremioIdFor } from './ids';
+import { dashedGuid, encodeJellyfinId, isLiveTvDescriptor, normaliseJellyfinId, parseStremioId, stremioIdFor } from './ids';
 import { coalesce, fetchStreams, fileFor, languageCode, languageName, mediaSourceFor, normaliseStreamBase, forgetDuration, placeholderMediaSource, recallDuration, recallFailure, recallIssued, recallStreams, rememberDuration, rememberFailure, rememberStreams, runtimeTicksFrom, streamClient, streamsState, streamUserAgent, toNotice, toPlayable, type StreamClient } from './streams';
 import { fetchAddonSubtitles, formatOf, pickSubtitles, recallOffered, rememberOffered, subtitleBody, subtitleCodecFor, subtitleExtensionOf, subtitleFormatFor, subtitleLanguage, type SubtitleTrack } from './subtitles';
 import { subtitleLanguageName, subtitleMenuTitles } from './subtitles';
@@ -55,6 +55,7 @@ import { oneIdAsked, withCriticRatings } from './criticRatings';
 import { ImageQueueFull, SIZED_WIDTH, imageQueueFull, inImageSlot, shrinkToWidth, widthStep } from '../posterCache/resize';
 import { IMAGE_CSP } from '../posterCache/proxyResponse';
 import { registerStubs } from './stubs';
+import { LIVE_GENRE_CATALOG, answerLiveTvListing, channelLogo, liveGroups, liveTvAsItem, registerLiveTvRoutes, streamRequestFor } from './livetv';
 import { answerPlaylistListing, hasPlaylists, playlistAsItem, playlistConcurrency, playlistImages, playlistsFolder, registerPlaylistRoutes, type PlaylistRouteDeps } from './playlists';
 import { noteWantsPeople } from './viewer';
 import { decodeCursor, exportRow, findUser, historyPage, historyUsers, isEpisodeVideo, itemIdForVideo, userByKey, videoIdsOf } from './history';
@@ -70,6 +71,11 @@ function maxMediaSources(): number {
 
 function streamNoticesOffered(): boolean {
   return String(require('../settingsService').getSetting('JELLYFIN_STREAM_NOTICES') ?? 'true').trim().toLowerCase() !== 'false';
+}
+
+/** What a stream can be asked for: a film or an episode, or a live channel or one of its programmes. */
+function isPlayableDescriptor(descriptor: any): boolean {
+  return descriptor?.k === 'movie' || descriptor?.k === 'episode' || descriptor?.k === 'channel' || descriptor?.k === 'program';
 }
 
 function encodeSeriesId(descriptor: any): string {
@@ -339,6 +345,8 @@ async function playedPick(req: any, userUUID: string, config: any, type: string,
 
 function userFor(profile: Profile, serverId: string, configuration?: any): any {
   const user = userDto(profile.userId, serverId, profile.name, avatarTag(profile));
+  // Whether there is anything to watch is answered by /LiveTv/Info and the views; a client reads this to show the section at all.
+  user.Policy = { ...user.Policy, EnableLiveTvAccess: true };
   if (configuration && typeof configuration === 'object') user.Configuration = { ...user.Configuration, ...configuration };
   if (profile.downloads === false) user.Policy = { ...user.Policy, EnableContentDownloading: false };
   return user;
@@ -1019,6 +1027,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const serverId = serverIdFor(userUUID);
 
     if (await answerPlaylistListing(req, res, playlistDeps, config)) return;
+    if (await answerLiveTvListing(req, res, config)) return;
 
     // The watchlist, newest first, is every client's favourites; older clients ask for it by likes.
     const ownWatchlist = clientHasOwnWatchlist();
@@ -1573,7 +1582,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     refresh = false,
     allowHeaders = false
   ): Promise<any[]> => {
-    if (!descriptor || (descriptor.k !== 'movie' && descriptor.k !== 'episode')) return [];
+    if (!descriptor || !isPlayableDescriptor(descriptor)) return [];
 
     const config = await loadConfig(req);
     const base = normaliseStreamBase(config?.jellyfinStreamUrl || '');
@@ -1582,10 +1591,11 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       return [];
     }
 
-    const stremioId = stremioIdFor(descriptor);
+    const live = await streamRequestFor(config, descriptor);
+    const stremioId = live ? live.id : stremioIdFor(descriptor);
     if (!stremioId) return [];
 
-    const stremioType = descriptor.k === 'movie' ? 'movie' : 'series';
+    const stremioType = live ? live.type : descriptor.k === 'movie' ? 'movie' : 'series';
     const client = clientFor(req, config);
     const cacheKey = streamCacheKey(req.params.userUUID, profileKey(config), stremioType, stremioId, client);
 
@@ -1602,7 +1612,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const sources: any[] = [];
     const notices: any[] = [];
     for (const stream of streams) {
-      const playable = toPlayable(stream, allowHeaders);
+      const playable = toPlayable(stream, allowHeaders, live?.scope);
       if (!playable) {
         if (!streamNoticesOffered()) continue;
         const notice = toNotice(stream);
@@ -1613,7 +1623,9 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       }
       if (seen.has(playable.id)) continue;
       seen.add(playable.id);
-      const source = mediaSourceFor(playable, runtimeTicks);
+      const source = mediaSourceFor(playable, live ? (live.runtimeMs ? live.runtimeMs * 10000 : null) : runtimeTicks);
+      // A channel has no length: a client that is told it has one shows a seek bar and stops at its end.
+      if (live?.live) Object.assign(source, { IsInfiniteStream: true, RunTimeTicks: undefined });
       if (playable.needsHeaders) headerSources.add(source);
       sources.push(source);
     }
@@ -1625,9 +1637,10 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
 
   // What the picker says when a resolve leaves nothing to list.
   const streamFailure = async (req: any, descriptor: any): Promise<string> => {
-    const stremioId = stremioIdFor(descriptor);
-    const stremioType = descriptor.k === 'movie' ? 'movie' : 'series';
     const config = await loadConfig(req);
+    const live = await streamRequestFor(config, descriptor);
+    const stremioId = live ? live.id : stremioIdFor(descriptor);
+    const stremioType = live ? live.type : descriptor.k === 'movie' ? 'movie' : 'series';
     const key = streamCacheKey(req.params.userUUID, profileKey(config), stremioType, stremioId, clientFor(req, config));
     return recallFailure(key) ?? 'No streams found for this title';
   };
@@ -1653,11 +1666,12 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
   };
 
   const streamsKnown = async (req: any, descriptor: any): Promise<'cached' | 'fetching' | null> => {
-    if (!descriptor || (descriptor.k !== 'movie' && descriptor.k !== 'episode')) return null;
-    const stremioId = stremioIdFor(descriptor);
-    if (!stremioId) return null;
-    const type = descriptor.k === 'movie' ? 'movie' : 'series';
+    if (!descriptor || !isPlayableDescriptor(descriptor)) return null;
     const config = await loadConfig(req);
+    const live = await streamRequestFor(config, descriptor);
+    const stremioId = live ? live.id : stremioIdFor(descriptor);
+    if (!stremioId) return null;
+    const type = live ? live.type : descriptor.k === 'movie' ? 'movie' : 'series';
     return streamsState(streamCacheKey(req.params.userUUID, profileKey(config), type, stremioId, clientFor(req, config)));
   };
 
@@ -1846,12 +1860,13 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
   const playbackHandler = async (req: any, res: any) => {
     const { itemId, descriptor } = await unwrapMarker(String(req.params.itemId));
 
-    if (!descriptor || (descriptor.k !== 'movie' && descriptor.k !== 'episode')) {
+    if (!descriptor || !isPlayableDescriptor(descriptor)) {
       res.status(404).json({ MediaSources: [], PlaySessionId: '', ErrorCode: 'NotAllowed' });
       return;
     }
 
-    if (await outsideViewingHours(req)) {
+    // Live TV is served as the stream addon has it; none of this server's rules apply to it.
+    if (!isLiveTvDescriptor(descriptor) && await outsideViewingHours(req)) {
       res.json({ MediaSources: [], PlaySessionId: randomUUID(), ErrorCode: 'NotAllowed' });
       return;
     }
@@ -1939,7 +1954,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
   // for the video and expect to be sent on.
   const videoStreamHandler = async (req: any, res: any) => {
     const { itemId, descriptor } = await unwrapMarker(String(req.params.itemId));
-    if (!descriptor || (descriptor.k !== 'movie' && descriptor.k !== 'episode')) {
+    if (!descriptor || !isPlayableDescriptor(descriptor)) {
       res.status(404).json({ Message: 'Item not found' });
       return;
     }
@@ -1951,7 +1966,7 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
         return;
       }
     }
-    if (await outsideViewingHours(req)) {
+    if (!isLiveTvDescriptor(descriptor) && await outsideViewingHours(req)) {
       res.status(403).json({ Message: 'Outside this user\'s viewing hours' });
       return;
     }
@@ -2032,6 +2047,9 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     if (descriptor?.k === 'boxset') {
       const folder = folderById(collectionById(config, descriptor.c), descriptor.f);
       return folder ? boxSetGenres(req.params.userUUID, config, folder) : { catalog: null, genres: [] };
+    }
+    if (descriptor?.k === 'livetv') {
+      return { catalog: { type: 'tv', id: LIVE_GENRE_CATALOG }, genres: await liveGroups(config) };
     }
     if (!descriptor || descriptor.k !== 'view') return { catalog: null, genres: [] };
 
@@ -2386,6 +2404,12 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
     const descriptor = await decodeJellyfinId(itemId);
     if (!descriptor) return undefined;
     if (descriptor.k === 'playlist') return playlistImages(req, playlistDeps, descriptor);
+    // A channel's logo is the one its stream addon lists, looked up again once it is no longer held.
+    if (descriptor.k === 'channel' || descriptor.k === 'program') {
+      const config = await loadConfig(req);
+      const logo = config ? await channelLogo(config, descriptor.t, descriptor.i) : undefined;
+      return logo ? { primary: logo } : undefined;
+    }
     if (descriptor.k === 'movie' || descriptor.k === 'series' || descriptor.k === 'season') {
       const stremioType = descriptor.k === 'movie' ? 'movie' : 'series';
       const meta = await fetchMeta(userUUID, stremioType, descriptor.i);
@@ -2479,6 +2503,16 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       return;
     }
     const descriptor = await decodeJellyfinId(String(req.params.itemId));
+    // A channel's logo is served as the stream addon gave it: not cached, sized or shaped into a poster.
+    if (isLiveTvDescriptor(descriptor)) {
+      if (relaysImages(req)) {
+        await relayImage(req, res, url);
+        return;
+      }
+      res.set('Cache-Control', 'public, max-age=86400');
+      res.redirect(302, url);
+      return;
+    }
     const collectionArt = descriptor?.k === 'collection' || descriptor?.k === 'boxset';
     const widePrimary = collectionArt || descriptor?.k === 'episode' || (Boolean(images?.thumb) && images?.primary === images?.thumb);
     const maxWidth = requestedWidth(req, kind === 'primary' && widePrimary ? 'wide' : kind);
@@ -3996,10 +4030,20 @@ export function createJellyfinRouter(options: { loginRateLimit?: any } = {}): an
       return;
     }
 
+    if (descriptor.k === 'livetv' || descriptor.k === 'channel' || descriptor.k === 'program') {
+      const config = await loadConfig(req);
+      const item = config ? await liveTvAsItem(req, config, descriptor) : null;
+      if (item) res.json(item);
+      else res.status(404).json({ Message: 'Item not found' });
+      return;
+    }
+
     res.status(404).json({ Message: 'Item not found' });
   }
   // Ahead of the stubs, which answer /Playlists with an empty list.
   registerPlaylistRoutes(router, playlistDeps);
+  // Ahead of the stubs, which answer the recording routes beside these with empty lists.
+  registerLiveTvRoutes(router);
   // Ahead of the item route, which would take /Items/Suggestions for an item id.
   registerStubs(router);
   router.get(['/Items/:itemId', '/Users/:userId/Items/:itemId'], singleItemHandler);

@@ -27,12 +27,10 @@ const LIST_ROUTES = [
   '/Items/:itemId/Chapters',
   '/Videos/:itemId/AdditionalParts',
   '/System/ActivityLog/Entries',
-  '/LiveTv/Programs',
+  // Channels, programmes and /LiveTv/Info are answered by livetv.ts; recording is not offered.
   '/LiveTv/Recordings',
   '/LiveTv/Timers',
   '/LiveTv/SeriesTimers',
-  '/LiveTv/Channels',
-  '/LiveTv/Programs/Recommended',
   '/LiveTv/Recordings/Folders',
 ];
 
@@ -75,10 +73,6 @@ export function registerStubs(router: any): void {
       ThemeSongsResult: empty,
       SoundtrackSongsResult: empty,
     });
-  });
-
-  router.get('/LiveTv/Info', (_req: any, res: any) => {
-    res.json({ Services: [], IsEnabled: false, EnabledUsers: [] });
   });
 
   router.get('/Playback/BitrateTest', (req: any, res: any) => {

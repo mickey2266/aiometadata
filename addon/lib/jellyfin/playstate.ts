@@ -2,7 +2,7 @@ import consola from 'consola';
 import { LRUCache } from 'lru-cache';
 import { envInt } from '../../utils/envNumber';
 import redis from '../redisClient';
-import { dashedGuid, decodeJellyfinId, encodeJellyfinId, normaliseJellyfinId, parseStremioId, stremioIdFor } from './ids';
+import { dashedGuid, decodeJellyfinId, encodeJellyfinId, isLiveTvDescriptor, normaliseJellyfinId, parseStremioId, stremioIdFor } from './ids';
 import { mapWithConcurrency } from '../../utils/concurrency';
 import { fetchMeta } from './items';
 import { upsertPlaystateEverywhere } from './aliases';
@@ -293,6 +293,8 @@ async function resolveSession(userUUID: string, itemId: string, known?: any): Pr
 
   const descriptor = await decodeJellyfinId(itemId);
   if (!descriptor) return null;
+  // Live TV is never a session: no row, no meta read for it, nothing told to a tracker.
+  if (isLiveTvDescriptor(descriptor)) return null;
   if (descriptor.k !== 'movie' && descriptor.k !== 'episode') return null;
 
   const videoId = stremioIdFor(descriptor);
@@ -484,6 +486,7 @@ async function report(
   const userUUID = req.params?.userUUID;
   const itemId = bodyItemId(req, body);
   if (!userUUID || !itemId) return;
+  if (await isLiveTvItem(itemId)) return;
 
   const { loadConfig } = require('./context');
   const config = await loadConfig(req);
@@ -619,6 +622,7 @@ async function markEach(req: any, body: any, event: 'played' | 'unplayed', upTo 
   const userUUID = req.params?.userUUID;
   const itemId = bodyItemId(req, body);
   if (!userUUID || !itemId) return;
+  if (await isLiveTvItem(itemId)) return;
 
   const { loadConfig } = require('./context');
   const config = await loadConfig(req);
@@ -698,6 +702,10 @@ async function markEach(req: any, body: any, event: 'played' | 'unplayed', upTo 
 
 const isPlayable = (descriptor: any): boolean => descriptor?.k === 'movie' || descriptor?.k === 'episode';
 
+async function isLiveTvItem(itemId: string): Promise<boolean> {
+  return isLiveTvDescriptor(await decodeJellyfinId(itemId));
+}
+
 /**
  * The item itself, or each aired episode of the season or series it names, with the meta
  * they share. Up to an episode, the aired episodes of its series up to and including it.
@@ -773,6 +781,8 @@ export async function recordProgress(req: any, body: any): Promise<void> {
   const itemId = bodyItemId(req, body);
   const positionMs = ticksToMs(body?.PositionTicks ?? body?.positionTicks);
   if (!userUUID || !itemId) return;
+  // Not even held in memory: a held position is what reads as now playing and resumes.
+  if (await isLiveTvItem(itemId)) return;
   if (positionMs === null) {
     logger.debug(`Progress for ${itemId} carries no position`);
     return;
@@ -857,6 +867,8 @@ export async function recordUserData(req: any, body: any): Promise<{ played: boo
   const userUUID = req.params?.userUUID;
   const itemId = bodyItemId(req, body);
   if (!userUUID || !itemId) return null;
+  // Taken and not kept, so a client marking a channel is not answered with an error.
+  if (await isLiveTvItem(itemId)) return { played: false, positionMs: 0 };
 
   const rated = body && ('Rating' in body || 'rating' in body);
   if (rated) {

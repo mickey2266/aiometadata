@@ -265,6 +265,11 @@ export async function handlePlaybackReport(
   config: any,
   userUUID: string
 ): Promise<PlaybackOutcome> {
+  // Live TV is watched, not tracked: taken and dropped, so a front-end does not retry it.
+  if (type === 'tv' || type === 'channel') {
+    logger.debug(`Not tracking live TV ${type}/${id}`);
+    return { status: 204 };
+  }
   if ((TITLE_EVENTS as readonly string[]).includes(String(body?.event || ''))) return handleTitleReport(type, id, body, config, userUUID);
   const scope = String(body?.scope || '');
   if (scope === 'season' || scope === 'series') return handleBulkPlaybackReport(type, id, body, config, userUUID);
