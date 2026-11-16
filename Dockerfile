@@ -8,6 +8,9 @@ RUN npm run build && npm run build:backend
 FROM mirror.gcr.io/library/node:24-alpine AS runner
 WORKDIR /app
 LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later AND FSL-1.1-ALv2"
+LABEL org.opencontainers.image.source="https://github.com/mickey2266/aiometadata"
+# This build carries changes of its own, so the About dialog links to this fork's source. An instance can still override it.
+ENV SOURCE_CODE_URL=https://github.com/mickey2266/aiometadata
 RUN apk add --no-cache ca-certificates wget
 COPY package*.json package-lock.json* ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
