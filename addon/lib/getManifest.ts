@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 require("dotenv").config();
 import { getGenreList } from "./getGenreList";
 import { getLanguages } from "./getLanguages";
@@ -15,16 +17,19 @@ import { configCatalogFor, placeCollections } from "./collectionBuilder/homeOrde
 import { similarCatalogs } from "./similarCatalog";
 import { holderCards, rowOwner, servesCatalog, withAccountOwner } from "./accounts";
 import { hasNamedViewers } from "./jellyfin/profiles";
+import { isMovieLensExploreId } from "./movielensCatalogIds";
 const jikan: any = require('./mal');
 const DEFAULT_LANGUAGE = "en-US";
 const catalogsTranslations: Record<string, Record<string, string>> = catalogsTranslationsJson;
 const CATALOG_TYPES: Record<string, any> = catalogTypesJson;
 import { cacheWrapJikanApi, cacheWrapGlobal, cacheWrapStremThruGenres, cacheWrapLumiereGenres } from './getCache';
 import { mergeGenreOptions } from '../utils/mergedCatalog';
+import { sourceFilterOptions } from './collectionBuilder/mergeSourceFilter';
 import { fetchLumiereGenres, lumiereApiBase, lumiereGenreLabel, lumiereListOf } from '../utils/lumiereLists';
 const { getSetting }: any = require('./settingsService');
 import consola from 'consola';
-import { hasAnyWatchTrackingEnabled } from './watchTracking';
+import { hasAnyWatchTrackingEnabled, scrobblesJellyfin } from './watchTracking';
+import { scrobbleResources } from './playSources';
 const logger = consola.withTag('Manifest');
 
 
@@ -708,6 +713,7 @@ function createServerWatchlistCatalog(userCatalog: any, showPrefix: boolean = fa
 function createMergedCatalog(
   userCatalog: any,
   allBuiltCatalogs: any[],
+  userCatalogs: any[],
   showPrefix: boolean = false,
   prefixName: string = "AIOMetadata"
 ): any {
@@ -715,12 +721,14 @@ function createMergedCatalog(
     logger.debug(`Creating Merged catalog: ${userCatalog.id} (${userCatalog.type})`);
     const catalogType = userCatalog.displayType || userCatalog.type;
     const sources = userCatalog.metadata?.mergedSources || [];
+    // A merge filtered by source offers its sources in the one filter apps show, in place of genres.
+    const bySource = Boolean(userCatalog.metadata?.filterBySource);
 
     // Genre union across the already-built source manifest entries, deduped by
     // a normalized key so that slug-style labels (e.g. Simkl "science-fiction")
     // collapse onto display-style labels (e.g. Letterboxd "Science Fiction").
     const perSourceOptions: string[][] = [];
-    for (const src of sources) {
+    for (const src of bySource ? [] : sources) {
       const suffixed = `${src.catalogId}_${src.catalogType}`;
       const built = allBuiltCatalogs.find((c: any) => {
         if (!c) return false;
@@ -738,7 +746,9 @@ function createMergedCatalog(
       if (opts.length > 0) perSourceOptions.push(opts);
     }
 
-    const genreOptions = mergeGenreOptions(perSourceOptions);
+    const genreOptions = bySource
+      ? sourceFilterOptions(sources, userCatalogs).map((option) => option.label)
+      : mergeGenreOptions(perSourceOptions);
 
     const finalGenreOptions = genreOptions.length > 0
       ? (userCatalog.showInHome ? genreOptions : ['None', ...genreOptions])
@@ -912,8 +922,7 @@ async function lumiereGenreOptions(): Promise<Record<'movie' | 'series', string[
   }
 }
 
-/** `viewer`, a named user's scoped config, decides which account rows are listed. */
-async function getManifest(config: any, opts: { tags?: string[]; userUUID?: string; viewer?: any } = {}): Promise<any> {
+async function getManifest(config: any, opts: { tags?: string[]; userUUID?: string; viewerConfig?: any } = {}): Promise<any> {
   const startTime = Date.now();
   logger.start('Starting manifest generation...');
 
@@ -928,8 +937,10 @@ async function getManifest(config: any, opts: { tags?: string[]; userUUID?: stri
   const tags = Array.isArray(opts.tags) ? opts.tags.filter(Boolean) : [];
   const tagSet = new Set(tags.map((t: string) => t.toLowerCase()));
   const jikanEnabled = jikan.isJikanEnabled();
+  // A named household user is listed what their own accounts serve; nothing else reads their config.
+  const servedBy = opts.viewerConfig ?? config;
   const enabledCatalogs = userCatalogs.filter((c: any) =>
-    c.enabled && servesCatalog(opts.viewer ?? config, c) && (jikanEnabled || !jikan.isJikanCatalogId(c.id)) && (tagSet.size === 0 || rowOwner(c) || (Array.isArray(c.tags) && c.tags.some((t: any) => tagSet.has(String(t).toLowerCase()))))
+    c.enabled && servesCatalog(servedBy, c) && (jikanEnabled || !jikan.isJikanCatalogId(c.id)) && (tagSet.size === 0 || rowOwner(c) || (Array.isArray(c.tags) && c.tags.some((t: any) => tagSet.has(String(t).toLowerCase()))))
   );
 
   // Absorbed merge sources must be built (even if disabled) so their genres feed the parent.
@@ -1246,8 +1257,8 @@ async function getManifest(config: any, opts: { tags?: string[]; userUUID?: stri
       if (userCatalog.id.startsWith('movielens.')) {
           logger.debug(`Processing MovieLens catalog: ${userCatalog.id}`);
           const catalogType = userCatalog.displayType || userCatalog.type;
-          const supportsGenres = userCatalog.id.startsWith('movielens.explore') || userCatalog.id.startsWith('movielens.watchlist');
-          const genreOptions = supportsGenres ? MOVIELENS_GENRES : [];
+          const takesGenres = isMovieLensExploreId(userCatalog.id) || userCatalog.id === 'movielens.watchlist';
+          const genreOptions = takesGenres ? MOVIELENS_GENRES : [];
           const options = userCatalog.showInHome ? genreOptions : ['None', ...genreOptions];
           const extra: any[] = [];
           if (options.length > 0) {
@@ -1467,7 +1478,7 @@ async function getManifest(config: any, opts: { tags?: string[]; userUUID?: stri
       return catalogs.findIndex(c => c.id === catId);
     };
     for (const { userCatalog, configIndex } of mergedUserCatalogs) {
-      const built = createMergedCatalog(userCatalog, catalogs, showPrefix, prefixName);
+      const built = createMergedCatalog(userCatalog, catalogs, userCatalogs, showPrefix, prefixName);
       if (!built) continue;
       const preceding = enabledCatalogs.slice(0, configIndex);
       let insertIdx = 0;
@@ -1704,7 +1715,9 @@ async function getManifest(config: any, opts: { tags?: string[]; userUUID?: stri
     }
   }
 
-  if (!config.hideStremioCatalogs) {
+  // Catalogs only Stremio understands. Other clients render them as stray rows,
+  // so users can opt out with hideStremioCatalogs.
+  if (config.hideStremioCatalogs !== true) {
     catalogs.push({
       type: "series",
       id: "calendar-videos",
@@ -1754,10 +1767,8 @@ async function getManifest(config: any, opts: { tags?: string[]; userUUID?: stri
   // a front-end start delivering. Named as strings: a reader validates object resources against the names it
   // knows, and one that has never heard of these would reject the manifest whole.
   const anyoneTracks = watchTrackingEnabled || holderCards(config).some((card) => hasAnyWatchTrackingEnabled(withAccountOwner(config, card.id)));
-  const playbackReporting = anyoneTracks && config.playbackReporting === true;
-  if (playbackReporting) {
-    resources.push("watch_state", "playback");
-  }
+  const playbackReporting = anyoneTracks && scrobblesJellyfin(config);
+  resources.push(...scrobbleResources(config, anyoneTracks));
 
   const manifest = {
     id: buildInfo.name,

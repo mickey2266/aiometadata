@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { useEffect, useState } from 'react';
 import { Check, Clapperboard, Clock, Plus, Sparkles, Tv, TriangleAlert, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -65,6 +67,8 @@ interface Status {
   connected: { simkl: boolean; mdblist: boolean; local?: boolean };
   available?: { simkl: boolean; mdblist: boolean };
   provider: { provider: string; model: string } | null;
+  /** The instance supplies a Gemini key of its own. */
+  instanceGemini?: boolean;
   counts: { total: number; movies: number; series: number; anime: number; rated: number; meanRating?: number };
   profile: { summary: string; builtAt: string; builtFrom: number } | null;
   profiles?: Array<{ id: string; name: string; avatar?: string; linked: string[] }>;
@@ -99,7 +103,7 @@ function Avatar({ viewer, index }: { viewer: Viewer; index: number }) {
 }
 
 export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { config, setConfig, auth } = useConfig();
+  const { config, setConfig, auth, hasBuiltInGemini } = useConfig();
   const { models: openRouterModels, loading: openRouterModelsLoading } =
     useOpenRouterModels(config.apiKeys?.openrouter);
 
@@ -137,6 +141,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
   const hasHistory = hasSimkl || hasMdblist || hasPlays;
   const hasGemini = !!config.apiKeys?.gemini;
   const hasOpenRouter = !!config.apiKeys?.openrouter;
+  const geminiAvailable = hasGemini || (status?.instanceGemini ?? hasBuiltInGemini);
   const hasModel = hasGemini || hasOpenRouter;
   const ready = hasHistory && hasModel;
 
@@ -161,9 +166,10 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
   const refreshHours = draft.refresh_hours || 24;
   const refreshCustom = ![6, 12, 24].includes(refreshHours);
   const order = draft.order || 'balanced';
-  const usingOpenRouter = preferred === 'openrouter'
-    ? hasOpenRouter
-    : preferred === 'gemini' ? false : !hasGemini && hasOpenRouter;
+  // The server's order: the provider chosen, then the configuration's own keys, then the instance's.
+  const usingOpenRouter = preferred === 'openrouter' && hasOpenRouter
+    ? true
+    : preferred === 'gemini' && geminiAvailable ? false : !hasGemini && hasOpenRouter;
 
   // Reads what is already known; never triggers a build, so opening this panel
   // cannot spend a model call.
@@ -335,7 +341,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
       id: 'simkl',
       title: 'Simkl',
       description: hasSimkl ? 'Ratings and finished shows from the Simkl account.'
-        : isMain ? 'Connect Simkl in Integrations to read it here.' : `Link a Simkl account to ${viewer.name} in Jellyfin profiles.`,
+        : isMain ? 'Connect Simkl in Integrations to read it here.' : `Link a Simkl account to ${viewer.name} in People.`,
       available: hasSimkl,
       tag: hasSimkl ? 'Connected' : 'Not connected',
     },
@@ -343,7 +349,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
       id: 'mdblist',
       title: 'MDBList',
       description: hasMdblist ? 'Watch history from the MDBList key.'
-        : isMain ? 'Add an MDBList key in Integrations to read it here.' : `Link an MDBList key to ${viewer.name} in Jellyfin profiles.`,
+        : isMain ? 'Add an MDBList key in Integrations to read it here.' : `Link an MDBList key to ${viewer.name} in People.`,
       available: hasMdblist,
       tag: hasMdblist ? 'Connected' : 'Not connected',
     },
@@ -488,7 +494,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {selected?.description}
-                  {missing.length > 0 && !isMain ? ` ${missing.join(' and ')} can be linked to ${viewer.name} in Jellyfin profiles.` : ''}
+                  {missing.length > 0 && !isMain ? ` ${missing.join(' and ')} can be linked to ${viewer.name} in People.` : ''}
                 </p>
               </section>
 
@@ -501,7 +507,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
                   </p>
                 </div>
                 <div className="max-w-3xl space-y-4">
-                    {hasGemini && hasOpenRouter && (
+                    {geminiAvailable && hasOpenRouter && (
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">Provider</Label>
                         <div className={TRAY}>
@@ -513,6 +519,7 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
                             </button>
                           ))}
                         </div>
+                        {!hasGemini && <p className="text-xs text-muted-foreground">Gemini uses the key this instance provides.</p>}
                       </div>
                     )}
 

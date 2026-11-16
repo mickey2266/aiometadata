@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later WITH AdditionRef-AIOMetadata-FSL-linking
+// Copyright (C) 2021-2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { envInt } from '../envNumber';
 
 export type AiProvider = 'gemini' | 'openrouter';
@@ -58,6 +60,14 @@ export function refreshTtl(config: any): number {
   return Number.isFinite(fallback) && fallback > 0 ? fallback : 24 * 60 * 60;
 }
 
+/** The language a pick's reason is written in, as the configured tag. Empty for
+ *  English, which is what the model writes unasked, so English keys and rows
+ *  stay as they were before reasons followed the configuration. */
+export function reasonLanguage(config: any): string {
+  const tag = String(config?.language || 'en-US').trim() || 'en-US';
+  return tag.toLowerCase().startsWith('en') ? '' : tag;
+}
+
 const REASONING_SHARE: Record<string, number> = { high: 0.8, medium: 0.5, low: 0.2, minimal: 0.1, none: 0 };
 
 /** OpenRouter holds the cost of this many tokens against the balance while a call runs. */
@@ -76,22 +86,24 @@ export function reasoningEffort(config: any): string {
   return resolveProvider(config)?.preset ? '' : 'low';
 }
 
-export function reasonLanguage(config: any): string {
-  const language = config?.language || 'en-US';
-  return language.toLowerCase().startsWith('en') ? '' : language;
+/** A Gemini key the instance supplies, used when a configuration has none of its own. */
+export function instanceGeminiKey(): string {
+  return process.env.GEMINI_API_KEY || process.env.BUILT_IN_GEMINI_API_KEY || '';
 }
 
 export function resolveProvider(config: any): ResolvedProvider | null {
-  const geminiKey = config?.apiKeys?.gemini
-    || process.env.GEMINI_API_KEY
-    || process.env.BUILT_IN_GEMINI_API_KEY
-    || '';
-  const openrouterKey = config?.apiKeys?.openrouter || process.env.OPENROUTER_API_KEY || '';
+  const ownGemini = config?.apiKeys?.gemini || '';
+  const ownOpenrouter = config?.apiKeys?.openrouter || '';
+  const geminiKey = ownGemini || instanceGeminiKey();
+  const openrouterKey = ownOpenrouter || process.env.OPENROUTER_API_KEY || '';
 
+  // A key of the configuration's own comes before one the instance supplies.
   const preferred = config?.recommendations?.provider;
   let provider: AiProvider;
   if (preferred === 'openrouter' && openrouterKey) provider = 'openrouter';
   else if (preferred === 'gemini' && geminiKey) provider = 'gemini';
+  else if (ownGemini) provider = 'gemini';
+  else if (ownOpenrouter) provider = 'openrouter';
   else if (geminiKey) provider = 'gemini';
   else if (openrouterKey) provider = 'openrouter';
   else return null;
@@ -116,6 +128,6 @@ export function resolveProvider(config: any): ResolvedProvider | null {
 }
 
 module.exports = {
-  resolveProvider, reasoningEffort, reasonLanguage, budgetFor, REASONING_EFFORTS, RECOMMENDATION_EPOCH,
-  refreshTtl, REFRESH_HOURS, pickOrder, PICK_ORDERS, voteFloor,
+  resolveProvider, instanceGeminiKey, reasoningEffort, budgetFor, REASONING_EFFORTS, RECOMMENDATION_EPOCH,
+  refreshTtl, REFRESH_HOURS, pickOrder, PICK_ORDERS, voteFloor, reasonLanguage,
 };
