@@ -52,7 +52,7 @@ const { isLandscapeCatalogConfig } = require("./utils/catalogPosterShape");
 const { getFavorites, getWatchList } = require("./lib/getPersonalLists");
 const { resolveDynamicTmdbDiscoverParams } = require('./lib/tmdbDiscoverDateTokens');
 const { applyCatalogKeyArgs, applyCatalogKeyStamps, hiddenCatalogGenre } = require('./lib/catalogKeyArgs');
-const { blurImage, convertBannerToBackground } = require('./utils/imageProcessor');
+const { blurImage, convertBannerToBackground, normaliseBannerOptions } = require('./utils/imageProcessor');
 const { getAiTriggerKeyword, applyAiTrigger } = require('./utils/aiSearchTrigger');
 const { TraktClient } = require('./lib/trakt');
 const movielens = require('./lib/movielens');
@@ -258,7 +258,11 @@ async function testKeysRateLimitMiddleware(req, res, next) {
 
   try {
     const minuteBucket = Math.floor(Date.now() / 60000);
-    const rateKey = `rate-limit:test-keys:${minuteBucket}`;
+    // Each caller has its own allowance, so one cannot use up everyone's.
+    const caller = req.session?.accountId
+      ? `account:${req.session.accountId}`
+      : `address:${require('./lib/authRoutes').clientAddress(req)}`;
+    const rateKey = `rate-limit:test-keys:${caller}:${minuteBucket}`;
     const currentCount = await redis.incr(rateKey);
 
     // First hit in this minute bucket: set a short TTL.
@@ -317,7 +321,7 @@ async function configLoadRateLimitMiddleware(req, res, next) {
 
 
 const posterCacheConfig = require('./lib/posterCache/config.js');
-const { buildProxyArtUrl, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
+const { buildProxyArtUrl, followableFallback, proxyArtUrlVouched } = require('./lib/posterCache/proxyArt.js');
 const { applyMetaArt } = require('./lib/metaArt');
 const { serveStoreResult, servePassThrough, openArtStream } = require('./lib/posterCache/artProxyServe.js');
 
@@ -4347,9 +4351,11 @@ async function hydraReinstall(instanceUrl: string, apiKey: string, addonUrl: str
   const { httpPost } = require('./utils/httpClient');
   const target = `${managerAccounts.normalizeInstanceUrl(instanceUrl)}/hydra/reinstall`;
   try {
+    const guard = require('./utils/outboundGuard');
     const response = await httpPost(target, { addonUrl }, {
       headers: { 'X-API-Key': apiKey },
-      timeout: 15000
+      timeout: 15000,
+      ...guard.addonRequest(guard.addonFetchMaxBytes(), 30000)
     });
     if (typeof response.data === 'string') {
       consola.warn(`[AIOManager Proxy] Non-JSON response from ${target} (status ${response.status}); this instance does not expose the Hydra API, reinstall was not processed`);
@@ -4357,6 +4363,9 @@ async function hydraReinstall(instanceUrl: string, apiKey: string, addonUrl: str
     }
     return { ok: true, status: 200, data: response.data ?? { success: true } };
   } catch (error: any) {
+    if (require('./utils/outboundGuard').isRefusedDestination(error)) {
+      return { ok: false, status: 400, error: 'That address is on a private network, which this server reads from only when its admin lists the host in OUTBOUND_ALLOWED_PRIVATE_HOSTS' };
+    }
     const upstreamStatus = error.response?.status;
     let upstreamData = error.response?.data;
     if (typeof upstreamData === 'string') {
@@ -4553,7 +4562,8 @@ addon.get("/api/aiomanager/status", async (req, res) => {
 
   try {
     const { httpGet } = require('./utils/httpClient');
-    const response = await httpGet(`${instanceUrl.replace(/\/+$/, '')}/hydra/status`, { timeout: 10000 });
+    const guard = require('./utils/outboundGuard');
+    const response = await httpGet(`${instanceUrl.replace(/\/+$/, '')}/hydra/status`, { timeout: 10000, ...guard.addonRequest(guard.addonFetchMaxBytes(), 20000) });
     // Releases without Hydra answer the SPA catch-all, so HTML means unsupported.
     if (typeof response.data === 'string' || !response.data?.capabilities) {
       return res.json({ supported: false });
@@ -6356,10 +6366,12 @@ addon.get("/api/proxy-manifest", async function (req, res) {
     return res.status(400).json({ error: 'Invalid url parameter' });
   }
 
+  const guard = require('./utils/outboundGuard');
   try {
     const { httpGet } = require('./utils/httpClient');
     const manifestData = await httpGet(url, {
-      timeout: 10000
+      timeout: 10000,
+      ...guard.addonRequest(guard.addonFetchMaxBytes(), 20000)
     });
 
     let data = manifestData.data;
@@ -6376,6 +6388,12 @@ addon.get("/api/proxy-manifest", async function (req, res) {
     res.setHeader('Content-Type', 'application/json');
     res.json(data);
   } catch (error) {
+    if (guard.isRefusedDestination(error)) {
+      return res.status(400).json({ error: 'That address is on a private network, which this server reads from only when its admin lists the host in OUTBOUND_ALLOWED_PRIVATE_HOSTS' });
+    }
+    if (guard.isResponseTooLarge(error)) {
+      return res.status(502).json({ error: 'That link answered with more than this server reads (ADDON_FETCH_MAX_MB)' });
+    }
     consola.error(`[Proxy Manifest] Failed to fetch manifest from ${url}:`, error.message);
     res.status(error.response?.status || 500).json({ 
       error: error.message || 'Failed to fetch manifest' 
@@ -6454,7 +6472,8 @@ function warnRefusedOrigin(context, message) {
 const handlePosterProxy = async function (req, res) {
   const { type, id } = req.params;
   const { fallback, lang, key, url: customUrl, sig } = req.query;
-  const sendFallback = () => (fallback ? res.redirect(302, fallback) : res.status(404).end());
+  const followable = followableFallback(fallback, req.query.fsig);
+  const sendFallback = () => (followable ? res.redirect(302, followable) : res.status(404).end());
   if (!key && !customUrl) {
     return sendFallback();
   }
@@ -6521,9 +6540,10 @@ addon.get("/poster/:type/:id", handlePosterProxy);
 function streamArtWithFallback(assetName) {
   return async function (req, res) {
     const { id } = req.params;
-    const { fallback, url: customUrl, sig } = req.query;
+    const { url: customUrl, sig } = req.query;
+    const followable = followableFallback(req.query.fallback, req.query.fsig);
     if (!customUrl) {
-      return res.redirect(302, fallback || '');
+      return followable ? res.redirect(302, followable) : res.status(404).end();
     }
     const bypassed = posterCacheConfig.isBypassed(customUrl);
     // A property of the URL, not of whether we are storing it — see handlePosterProxy.
@@ -6563,8 +6583,8 @@ function streamArtWithFallback(assetName) {
       } else {
         consola.debug(`Art proxy miss for ${assetName} ${id}: ${error.message}`);
       }
-      if (fallback) {
-        return res.redirect(302, fallback);
+      if (followable) {
+        return res.redirect(302, followable);
       }
       res.status(404).end();
     }
@@ -6630,15 +6650,14 @@ addon.get("/api/image/banner-to-background", async function (req, res) {
   if (!imageUrl) { return res.status(400).send('Image URL not provided'); }
   
   try {
-    // Parse options from query parameters
-    const options = {
-      width: parseInt(req.query.width) || 1920,
-      height: parseInt(req.query.height) || 1080,
-      blur: parseFloat(req.query.blur) || 0,
-      brightness: parseFloat(req.query.brightness) || 1,
-      contrast: parseFloat(req.query.contrast) || 1,
-      position: req.query.position || 'center' // Add position parameter
-    };
+    const options = normaliseBannerOptions({
+      width: parseInt(req.query.width),
+      height: parseInt(req.query.height),
+      blur: parseFloat(req.query.blur),
+      brightness: parseFloat(req.query.brightness),
+      contrast: parseFloat(req.query.contrast),
+      position: typeof req.query.position === 'string' ? req.query.position : undefined,
+    });
     
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');

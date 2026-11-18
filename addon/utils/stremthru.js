@@ -26,7 +26,12 @@ const host = process.env.HOST_NAME.startsWith('http')
  */
 async function _makeRequest(url) {
   try {
-    const response = await httpGet(url, { headers: { 'User-Agent': `AIOMetadata/${buildInfo.version}` }, timeout: 30000 });
+    const guard = require('./outboundGuard');
+    const response = await httpGet(url, {
+      headers: { 'User-Agent': `AIOMetadata/${buildInfo.version}` },
+      timeout: 30000,
+      ...guard.addonRequest(guard.addonFetchMaxBytes(), 60000),
+    });
     return response.data;
   } catch (err) {
     if (err.response) {
@@ -128,7 +133,7 @@ async function _processStandardItem(item, provider, language, config, includeVid
 function _createFallbackMeta(item, language, config) {
     const fallbackPosterUrl = item.poster || `${host}/missing_poster.png`;
     const posterProxyUrl = Utils.isPosterRatingEnabled(config)
-        ? `${host}/poster/${item.type}/${item.id}?fallback=${encodeURIComponent(fallbackPosterUrl)}&lang=${language}&key=${config.apiKeys?.rpdb}`
+        ? `${host}/poster/${item.type}/${item.id}?${require('../lib/posterCache/proxyArt').fallbackQuery(fallbackPosterUrl)}&lang=${language}&key=${config.apiKeys?.rpdb}`
         : fallbackPosterUrl;
     
     return {

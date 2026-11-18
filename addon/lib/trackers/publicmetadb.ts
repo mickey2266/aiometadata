@@ -86,9 +86,10 @@ async function redate({ config, ids, mediaType, season, episode, change, within 
   }
   // The viewing being moved is found first, so a destination near it can never stand in for it.
   const old = nearestPlay(plays, change.from, (play) => play.watched_at, within);
-  if (!old?.id) return nothingToMove('https://publicmetadb.com/api/watched', 'no play near the old date');
+  // No play near the date is what a delete is after, so it is done rather than failed.
+  if (!old?.id) return change.remove ? undefined : nothingToMove('https://publicmetadb.com/api/watched', 'no play near the old date');
   const placed = nearestPlay(plays.filter((play) => play !== old), change.to, (play) => play.watched_at, SAME_PLAY_MS);
-  if (placed && !change.apart) {
+  if (change.remove || (placed && !change.apart)) {
     await removePlay(apiKey, String(old.id));
     await database.deleteTrackerMirror(mirrorKey, [`play:${old.id}`]).catch(() => undefined);
     await database.bumpTrackerSyncVersion(mirrorKey).catch(() => undefined);
