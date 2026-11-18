@@ -12,6 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Callout } from '@/components/settings/Callout';
 import { SettingRow } from '@/components/settings/SettingRow';
+import { EngineOnlySearch, WebSearchEngineSelect } from '@/components/settings/WebSearchEngine';
+import { useWebSearch } from '@/hooks/useWebSearch';
 import { useConfig } from '@/contexts/ConfigContext';
 import type { AppConfig, CatalogConfig } from '@/contexts/config';
 import { GEMINI_MODELS, isPresetModel, resolveCatalogModel, resolveGeminiModel } from '@/data/ai-models';
@@ -72,6 +74,8 @@ interface Status {
   counts: { total: number; movies: number; series: number; anime: number; rated: number; meanRating?: number };
   profile: { summary: string; builtAt: string; builtFrom: number } | null;
   profiles?: Array<{ id: string; name: string; avatar?: string; linked: string[] }>;
+  /** The last web search for these rows that failed, while an engine here is chosen. */
+  webSearchFailure?: { failure: string; at: number } | null;
 }
 
 interface Viewer {
@@ -103,9 +107,9 @@ function Avatar({ viewer, index }: { viewer: Viewer; index: number }) {
 }
 
 export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { config, setConfig, auth, hasBuiltInGemini } = useConfig();
+  const { config, setConfig, auth, hasBuiltInGemini, aiCustomEndpoint } = useConfig();
   const { models: openRouterModels, loading: openRouterModelsLoading } =
-    useOpenRouterModels(config.apiKeys?.openrouter);
+    useOpenRouterModels(config.apiKeys?.openrouter, aiCustomEndpoint);
 
   const [status, setStatus] = useState<Status | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
@@ -160,6 +164,8 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
   const source: Source = isMain ? mainSource : draft.profiles?.[viewerKey]?.sources || 'same';
   const preferred = draft.provider;
   const webSearch = draft.web_search === true;
+  const webVia = draft.web_search_via;
+  const web = useWebSearch();
   const thinking = draft.reasoning_effort || 'low';
   const stalled = draft.stalled_weight || 'note';
   const staleDays = draft.stale_after_days || 180;
@@ -316,7 +322,9 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
   const currentModel = usingOpenRouter
     ? draft.openrouter_model || ''
     : draft.gemini_model || '';
-  const presetModel = usingOpenRouter && isPresetModel(currentModel || resolveCatalogModel(config, 'openrouter'));
+  const presetModel = usingOpenRouter && isPresetModel(currentModel || resolveCatalogModel(config, 'openrouter', !!aiCustomEndpoint));
+  // Another OpenAI-compatible endpoint has neither OpenRouter's search nor its thinking control.
+  const customEndpoint = usingOpenRouter && !!aiCustomEndpoint;
   const thinkingValue = draft.reasoning_effort || (presetModel ? 'preset' : thinking);
 
   const possessive = isMain ? 'your' : `${viewer.name}'s`;
@@ -565,12 +573,24 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
                       )}
                     </div>
 
-                    <SettingRow
+                    {customEndpoint && web.offered(webVia) && (
+                      <EngineOnlySearch
+                        id="recommendation-web-search"
+                        label="Web search"
+                        on={webSearch && Boolean(webVia)}
+                        via={webVia}
+                        onChange={next => patch(next ? { web_search: true, web_search_via: next } : { web_search_via: undefined })}
+                      />
+                    )}
+
+                    {!customEndpoint && <SettingRow
                       htmlFor="recommendation-web-search"
                       label="Web search"
                       description={presetModel
                         ? 'A preset takes web search from its own settings on OpenRouter.'
-                        : usingOpenRouter
+                        : webSearch && webVia
+                          ? 'Lets the model look up what has come out lately.'
+                          : usingOpenRouter
                           ? 'Adds :online so the model sees live results. Billed by OpenRouter at roughly $0.005 per search, on top of the model.'
                           : 'Lets the model look up what has come out lately. Requires a paid Gemini API key; free keys will get 429 errors.'}
                       control={
@@ -588,9 +608,25 @@ export function RecommendationsIntegration({ isOpen, onClose }: { isOpen: boolea
                           recommended, however recent the rest of your library is.
                         </Callout>
                       ) : undefined}
-                    />
+                    />}
 
-                    {usingOpenRouter && (
+                    {!customEndpoint && webSearch && !presetModel && web.offered(webVia) && (
+                      <WebSearchEngineSelect
+                        id="recommendation-web-search-engine"
+                        own={usingOpenRouter ? 'OpenRouter' : 'Google'}
+                        via={webVia}
+                        onChange={via => patch({ web_search_via: via })}
+                      />
+                    )}
+
+                    {webSearch && webVia && status?.webSearchFailure && (
+                      <Callout variant="warn" className="text-xs">
+                        The web search failed on {new Date(status.webSearchFailure.at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}: {status.webSearchFailure.failure} Rows
+                        built since then had no web results, so recent releases may be missing.
+                      </Callout>
+                    )}
+
+                    {usingOpenRouter && !customEndpoint && (
                       <SettingRow
                         htmlFor="recommendation-thinking"
                         label="Thinking"

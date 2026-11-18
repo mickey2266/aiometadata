@@ -636,6 +636,8 @@ const respond = function (req, res, data, opts?) {
       hasBuiltInTmdb: !!getSetting('BUILT_IN_TMDB_API_KEY'),
       hasBuiltInMdblist: !!getSetting('BUILT_IN_MDBLIST_API_KEY'),
       hasBuiltInGemini: !!getSetting('BUILT_IN_GEMINI_API_KEY'),
+      aiCustomEndpoint: require('./utils/ai-endpoint').isCustomAiEndpoint(),
+      webSearch: require('./utils/webSearch').webSearchInfo(),
       catalogTTL: parseInt(getSetting('CATALOG_TTL') || String(24 * 60 * 60), 10),
       maxCatalogs: parseInt(getSetting('MAX_CATALOGS') || '', 10) || null,
       collectionImportCatalogCap: parseInt(getSetting('COLLECTION_IMPORT_CATALOG_CAP') || '', 10) || 400,
@@ -692,6 +694,17 @@ addon.post("/api/config/load/:userUUID", configLoadRateLimitMiddleware, configAp
 addon.put("/api/config/update/:userUUID", configApi.updateConfig.bind(configApi));
 addon.get('/api/config/is-trusted/:uuid', configApi.isTrusted.bind(configApi));
 addon.post("/api/test-keys", testKeysRateLimitMiddleware, configApi.testApiKeys);
+// Only the instance's own endpoint is asked, never an address from the request.
+addon.post("/api/ai/models", testKeysRateLimitMiddleware, async (req, res) => {
+  const { isCustomAiEndpoint, listEndpointModels } = require('./utils/ai-endpoint');
+  if (!isCustomAiEndpoint()) return res.status(404).json({ error: 'This instance uses OpenRouter' });
+  const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim().slice(0, 500) : '';
+  try {
+    res.json({ models: await listEndpointModels(apiKey) });
+  } catch (error: any) {
+    res.status(502).json({ error: `The AI endpoint did not list its models: ${String(error?.message || error).slice(0, 200)}` });
+  }
+});
 
 // --- Trakt OAuth Routes ---
 addon.get("/api/auth/trakt/authorize", async (req, res) => {
@@ -3228,6 +3241,8 @@ addon.get("/api/recommendations/status", async (req: any, res: any) => {
         provider: chosen ? { provider: chosen.provider, model: chosen.model } : null,
         counts: summarise(rows, require('./utils/recommendations/rows').tuningFrom(viewerConfig)),
         profile: profile ? { summary: profile.summary, builtAt: profile.builtAt, builtFrom: profile.builtFrom } : null,
+        // Only while the settings in front of the user still search through an engine here.
+        webSearchFailure: chosen?.webSource ? await require('./utils/webSearch').lastWebSearchFailure('recommendations', userUUID) : null,
       };
     });
     return res.json({ ...report, profiles, instanceGemini: !!instanceGeminiKey() });
@@ -5116,7 +5131,7 @@ const catalogRoute = async function (req, res) {
     catalogPageSize = parseInt(process.env.MAL_PAGE_SIZE || '25');
   } else if (cleanId === 'anilist.trending' || cleanId.startsWith('anilist.discover')) {
     catalogPageSize = 50;
-  } else if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.list.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || cleanId.startsWith('lumiere.') || cleanId.startsWith('aiom.watchlist.') || cleanId.startsWith('recommendations.') || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
+  } else if (cleanId.startsWith('simkl.watchlist.') || cleanId.startsWith('simkl.list.') || cleanId.startsWith('simkl.upnext') || cleanId.startsWith('simkl.dvd.') || cleanId.startsWith('simkl.trending.') || cleanId.startsWith('simkl.recipe.') || cleanId.startsWith('stremthru.') || cleanId.startsWith('mdblist.') || cleanId.startsWith('custom.') || cleanId.startsWith('trakt.') || cleanId.startsWith('anilist.') || cleanId.startsWith('letterboxd.') || cleanId.startsWith('movielens.') || cleanId.startsWith('lumiere.') || cleanId.startsWith('aiom.watchlist.') || cleanId.startsWith('recommendations.') || cleanId.startsWith('publicmetadb.list.') || cleanId.startsWith('publicmetadb.public.') || cleanId === 'publicmetadb.watchlist' || (cleanId.startsWith('tvdb.') && !cleanId.startsWith('tvdb.collection.'))) {
     catalogPageSize = parseInt(process.env.CATALOG_LIST_ITEMS_SIZE || '20');
   } else {
     catalogPageSize = 20;
@@ -5252,7 +5267,7 @@ const catalogRoute = async function (req, res) {
             consola.error(`[SEARCH] ${cleanId} failed: ${searchResult.error}`);
             return { metas: [], error: searchResult.error };
           }
-          return { metas: searchResult.metas || [] };
+          return { metas: searchResult.metas || [], ...(searchResult.webSearchFailed ? { webSearchFailed: searchResult.webSearchFailed } : {}) };
         }, searchEngine, cacheOptions);
       }
       } else if (cleanId.startsWith('custom.') || cleanId.startsWith('stremthru.')) {
@@ -5550,6 +5565,16 @@ const catalogRoute = async function (req, res) {
       if (showsNotices(config)) {
         responseData = dynamicError('catalog', { title: 'Search unavailable', description: reason }, actualType === 'series' ? 'series' : 'movie');
       }
+    }
+
+    // The search answered without the web: its results stay, led by a notice saying why. A copy, since a response
+    // can be shared between requests waiting on the same search.
+    if ((responseData as any)?.webSearchFailed) {
+      const { noticeMeta, showsNotices } = require('./lib/errorNotice');
+      const { webSearchFailed, ...rest } = responseData as any;
+      responseData = showsNotices(config) && Array.isArray(rest.metas)
+        ? { ...rest, metas: [noticeMeta({ title: 'Web search unavailable', description: `${webSearchFailed} This search ran without the web.` }, actualType === 'series' ? 'series' : 'movie'), ...rest.metas] }
+        : rest;
     }
 
     // The source's count of the whole list is for Jellyfin reads only.
@@ -5863,7 +5888,8 @@ addon.post(["/stremio/:userUUID/watch_state/push/:type/:id.json", "/stremio/:use
   // a 5xx would have the sender retrying it for a day.
   let config;
   try {
-    config = await loadConfigFromDatabase(userUUID);
+    const stored = await loadSharedConfig(userUUID);
+    config = stored ? { ...stored } : null;
   } catch {
     config = null;
   }

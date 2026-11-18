@@ -1444,33 +1444,42 @@ async function matchAndEnrichFromTMDB(suggestion: { title: string; year: string 
 }
 
 
-async function performAiSearch(query: string, language: string, config: any): Promise<{ metas: any[]; error?: string }> {
+async function performAiSearch(query: string, language: string, config: any): Promise<{ metas: any[]; error?: string; webSearchFailed?: string }> {
   const startTime = Date.now();
   const aiProvider = config.search?.ai_provider || 'gemini';
   const aiModel = aiProvider === 'openrouter'
     ? (config.search?.ai_model || 'google/gemini-2.5-flash')
     : resolveGeminiModel(config.search?.ai_model);
-  const aiWebSearch = aiProvider === 'openrouter'
+  const wantsWebSearch = aiProvider === 'openrouter'
     ? config.search?.ai_openrouter_web_search !== false
     : config.search?.ai_web_search === true;
+  // An engine here searches and hands the model its results, so it serves any model; otherwise the provider's own search.
+  const webSearch = require('../utils/webSearch');
+  const chosen = webSearch.chosenWebSearch(config, config.search?.ai_web_search_via);
+  const webSource = wantsWebSearch ? chosen.source : null;
+  const aiWebSearch = chosen.provider && wantsWebSearch && (aiProvider !== 'openrouter' || !require('../utils/ai-endpoint').isCustomAiEndpoint());
 
-  logger.info(`Starting AI search for query: "${query}" (provider: ${aiProvider}, model: ${aiModel}, webSearch: ${aiWebSearch})`);
+  logger.info(`Starting AI search for query: "${query}" (provider: ${aiProvider}, model: ${aiModel}, webSearch: ${webSource ? webSource.engine.id : aiWebSearch})`);
 
   try {
     let suggestions: any[];
+    const web = webSource ? await webSearch.webContext(webSource, `${query} movies and TV series`, { limit: 10 }) : null;
+    const webResults = web?.text || '';
+    // A search that ran without the web still answers; the reason goes with it for the catalog to show.
+    const degraded = web?.failure ? { webSearchFailed: web.failure } : {};
 
     if (aiProvider === 'openrouter') {
       const openrouterKey = config.apiKeys?.openrouter;
       const effectiveModel = withWebSearch(aiModel, aiWebSearch);
-      suggestions = await performOpenRouterSearch(openrouterKey, query, 'mixed', language, effectiveModel);
+      suggestions = await performOpenRouterSearch(openrouterKey, query, 'mixed', language, effectiveModel, webResults);
     } else {
       const geminiKey = config.apiKeys?.gemini || process.env.BUILT_IN_GEMINI_API_KEY;
-      suggestions = await performGeminiSearch(geminiKey, query, 'mixed', language, aiModel, aiWebSearch);
+      suggestions = await performGeminiSearch(geminiKey, query, 'mixed', language, aiModel, aiWebSearch, webResults);
     }
 
     if (!suggestions || suggestions.length === 0) {
       logger.info('AI search returned no suggestions.');
-      return { metas: [] };
+      return { metas: [], ...degraded };
     }
 
     logger.debug(`AI search returned ${suggestions.length} suggestions`);
@@ -1504,7 +1513,7 @@ async function performAiSearch(query: string, language: string, config: any): Pr
     const totalTime = Date.now() - startTime;
     logger.success(`AI search completed in ${totalTime}ms. Returning ${filteredResults.length} results.`);
 
-    return { metas: filteredResults };
+    return { metas: filteredResults, ...degraded };
 
   } catch (error: any) {
     const totalTime = Date.now() - startTime;
@@ -2490,7 +2499,7 @@ function getProviderFromSearchId(searchId: string): string {
   }
 }
 
-async function getSearch(id: string, type: string, language: string, extra: any, config: any): Promise<{ metas: any[]; error?: string }> {
+async function getSearch(id: string, type: string, language: string, extra: any, config: any): Promise<{ metas: any[]; error?: string; webSearchFailed?: string }> {
   const searchStartTime = Date.now();
 
   const queryText = extra?.search || extra?.genre_id || extra?.va_id || 'N/A';
@@ -2502,6 +2511,7 @@ async function getSearch(id: string, type: string, language: string, extra: any,
     }
 
     let metas: any[] = [];
+    let webSearchFailed: string | undefined;
     const page = extra.page ? parseInt(extra.page) : 1;
     switch (id) {
       case 'mal.genre_search':
@@ -2538,6 +2548,7 @@ async function getSearch(id: string, type: string, language: string, extra: any,
           const aiResult = await performAiSearch(query, language, config);
           if (aiResult.error) return { metas: [], error: aiResult.error };
           metas = aiResult.metas;
+          webSearchFailed = aiResult.webSearchFailed;
         }
         break;
 
@@ -2750,7 +2761,7 @@ async function getSearch(id: string, type: string, language: string, extra: any,
       logger.info(`Filtered out ${beforeFilterCount - afterFilterCount} malformed search results`);
     }
 
-    return { metas };
+    return { metas, ...(webSearchFailed ? { webSearchFailed } : {}) };
   } catch (error: any) {
     const searchDuration = Date.now() - searchStartTime;
     logger.error(`Search failed after ${searchDuration}ms for "${queryText}" (${id}):`, error);

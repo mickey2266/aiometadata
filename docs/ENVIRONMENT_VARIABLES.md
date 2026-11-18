@@ -288,6 +288,35 @@ to every visitor, so which one you reach for depends on who uses the instance.
 - **Description**: Google Gemini API key for AI search features
 - **Get it**: https://makersuite.google.com/app/apikey
 
+#### `OPENROUTER_BASE_URL`
+- **Optional**: Yes
+- **Default**: empty (OpenRouter)
+- **Description**: Sends every OpenRouter request (AI search, AI catalogs, recommendations) to another OpenAI-compatible API instead, such as LiteLLM, Ollama or vLLM. Users then enter that API's key in the OpenRouter key field (shown as **AI Endpoint API Key**) and pick its model names; the model list comes from its `/models`. OpenRouter's web search, presets and thinking control do not apply there and are hidden. An API that accepts any key can be used by every user of the instance. Also editable under **API Keys** in the dashboard settings.
+- **Example**: `OPENROUTER_BASE_URL=http://litellm:4000/v1`
+
+#### `WEB_SEARCH_ENGINE`
+- **Optional**: Yes
+- **Default**: `off`
+- **Values**: `off`, `fastcrw`, `searxng`
+- **Description**: A web search engine this instance offers every user for AI search and recommendations, so they need no key of their own. The engine searches the web and AIOMetadata hands the model the results, so any model can use it, including free ones and an `OPENROUTER_BASE_URL` endpoint. Users choose it under **Search with** in AI search and in recommendations. Users with a key of their own for an engine's hosted API (fastCRW) can use that engine whatever this is set to. Also editable under **API Keys** in the dashboard settings.
+- **Example**: `WEB_SEARCH_ENGINE=searxng`
+
+#### `WEB_SEARCH_URL`
+- **Optional**: Yes
+- **Default**: empty (the engine's hosted API, with `WEB_SEARCH_API_KEY`)
+- **Description**: The engine's server of this instance's own. SearXNG has no hosted API, so it needs this, and its `settings.yml` must list `json` under `search.formats`. For fastCRW, empty uses `https://api.fastcrw.com`.
+- **Example**: `WEB_SEARCH_URL=http://searxng:8080` or `WEB_SEARCH_URL=http://crw:3000`
+
+#### `WEB_SEARCH_API_KEY`
+- **Optional**: Yes
+- **Default**: empty
+- **Description**: A key for the engine's hosted API that the instance pays for, used by users who have no key of their own. A fastCRW search costs 2 credits.
+
+#### `WEB_SEARCH_CACHE_HOURS`
+- **Optional**: Yes
+- **Default**: `12`
+- **Description**: How long a web search is reused for the same query, by every user, before it runs again.
+
 ---
 
 ## Timezone Configuration

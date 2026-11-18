@@ -4,13 +4,14 @@ import consola from 'consola';
 import { LRUCache } from 'lru-cache';
 import { envInt } from '../../utils/envNumber';
 import { trackerConfig, type AccountService } from '../accounts';
-import { videoIdAliases } from './aliases';
+import { aliasConfigFor, videoIdAliases } from './aliases';
 import { listProfiles, scopeConfigToProfile } from './profiles';
 import { credentialFor, type Capable } from './trackerSource';
 import { asListed, belongsOn, furthestPerEntry, pullDrift, spellingFor, spellingsFor, viewingOf, type Viewing } from './trackerDrift';
 import { MARKS, freeRatingKeys, markVideo, planMarks, ratingKeys, writeMarks, type Mark, type MarkItem } from './trackerMarks';
 import { copyBatch, gapMs, isAnimeList, trackerName, trackerOf } from '../trackers';
 import { aliasesOf, copyTarget as targetOn, heldKeysOf, nativeKey, spellingsOf, type CopyItem, type CopyTarget, type MirrorRow, type WatchOutcome } from '../trackers/watches';
+import { HERE, planHome, writeHome } from './trackerCopyHome';
 
 const logger = consola.withTag('Trackers');
 const database: any = require('../database');
@@ -50,7 +51,7 @@ async function nativeEntries(service: string, credential: string, config: any): 
     }
     const spellings = spellingsOf(watch);
     const ids = new Set(spellings);
-    for (const spelling of spellings) for (const alias of await videoIdAliases(spelling).catch(() => [] as string[])) ids.add(alias);
+    for (const spelling of spellings) for (const alias of await videoIdAliases(spelling, config).catch(() => [] as string[])) ids.add(alias);
     if (kind === 'movie') for (const spelling of spellings) for (const more of await movieSpellings(spelling, config)) ids.add(more);
     const list = [...ids];
     byKey.set(key, { ids: list, kind, metaId: kind === 'movie' ? list[0] : imdb ?? `tmdb:${tmdb}`, season, episode, at, native: { tmdb, imdb, season, episode } });
@@ -99,7 +100,8 @@ export interface MarkCopyPlan {
 const planMs = () => envInt('JELLYFIN_COPY_PLAN_MINUTES', 10, 1) * 60 * 1000;
 // A plan is reused only while fresh, so it is not kept past that either.
 const plans = new LRUCache<string, CopyPlan | MarkCopyPlan>({ max: 200, ttl: planMs(), ttlAutopurge: true });
-const planKey = (userUUID: string, from: CopySide, to: CopySide, since: number, what: CopyWhat = 'watches', retry = false) => `${userUUID}|${from.key}|${to.key}|${since}|${what}|${retry}`;
+// A plan for the history here depends on which profiles it fills.
+const planKey = (userUUID: string, from: CopySide, to: CopySide, since: number, what: CopyWhat = 'watches', retry = false) => `${userUUID}|${from.key}|${to.key}|${since}|${what}|${retry}${to.key === HERE ? `|${[...from.keys].sort().join(',')}` : ''}`;
 const fresh = (plan: { checkedAt: number } | undefined) => plan && Date.now() - plan.checkedAt < planMs();
 
 async function readFresh(side: CopySide): Promise<void> {
@@ -131,8 +133,15 @@ export async function planCopy(userUUID: string, from: CopySide, to: CopySide, s
   const held = plans.get(key) as CopyPlan | undefined;
   if (held && !again && fresh(held)) return held;
   await readFresh(from);
+  if (to.key === HERE) {
+    await require('./watched').indexedSnapshot(from.service, from.credential, from.scoped);
+    const home: CopyPlan = { items: await planHome(userUUID, from, since), excluded: 0, blocked: { noId: 0, refused: 0 }, checkedAt: Date.now() };
+    plans.set(key, home, { ttl: planMs() });
+    return home;
+  }
   await readFresh(to);
   const { indexedSnapshot, watchedAmong, movieSpellings } = require('./watched');
+  const aliasConfig = await aliasConfigFor(userUUID);
   if (tmdbNumbered(from.service) && tmdbNumbered(to.service)) {
     const target = await indexedSnapshot(to.service, to.credential, to.scoped);
     const { shouldTrackServiceMediaType } = require('../watchTracking');
@@ -172,7 +181,7 @@ export async function planCopy(userUUID: string, from: CopySide, to: CopySide, s
   const viewings: Viewing[] = [];
   let excluded = 0;
   for (const row of rows) {
-    const ids = [String(row.video_id), ...(await videoIdAliases(String(row.video_id)).catch(() => [] as string[]))];
+    const ids = [String(row.video_id), ...(await videoIdAliases(String(row.video_id), aliasConfig).catch(() => [] as string[]))];
     if (row.kind === 'movie') ids.push(...(await movieSpellings(String(row.video_id), from.scoped)));
     const viewing = viewingOf('', Number(row.at) || 0, [...new Set(ids)]);
     if (!viewing) continue;
@@ -363,10 +372,12 @@ async function step(id: number): Promise<void> {
   if (!job || job.status !== 'running') return;
   const stored = await database.getUserConfig(job.user_uuid).catch(() => null);
   const config = stored ? { ...scopeConfigToProfile(stored, job.user_uuid, job.profile || null), userUUID: job.user_uuid } : null;
-  const credential = config ? credentialFor(config, job.to_service) : undefined;
+  const home = job.to_service === HERE;
+  // Bringing watches in needs only the tracker they come from.
+  const credential = !config ? undefined : home ? sourceCredential(stored, job) : credentialFor(config, job.to_service);
   const { sourceKeyFor } = require('./trackerMirror');
-  if (!credential || sourceKeyFor(job.to_service, credential) !== job.to_key) {
-    await database.updateCopyJob(id, { status: 'failed', lastError: `${trackerName(job.to_service)} is no longer connected`, finishedAt: Date.now() }, 'running');
+  if (!credential || (!home && sourceKeyFor(job.to_service, credential) !== job.to_key)) {
+    await database.updateCopyJob(id, { status: 'failed', lastError: `${trackerName(home ? job.from_service : job.to_service)} is no longer connected`, finishedAt: Date.now() }, 'running');
     return;
   }
   const what: CopyWhat = MARKS.has(job.what) ? job.what : 'watches';
@@ -378,7 +389,8 @@ async function step(id: number): Promise<void> {
   let outcome: Outcome;
   try {
     if (what === 'ratings') await bringRatingsHome(job.user_uuid, job.profile, items);
-    if (what !== 'watches') outcome = await writeMarks(what, items, { service: job.to_service, credential, scoped: config }, job.user_uuid);
+    if (home) outcome = await writeHome(job.user_uuid, { service: job.from_service, credential, scoped: config }, items);
+    else if (what !== 'watches') outcome = await writeMarks(what, items, { service: job.to_service, credential, scoped: config }, job.user_uuid);
     else {
       await bringHome(job.user_uuid, job, items, config, stored);
       // Written as the target has them: an episode matched to a film there goes as the film, in its place in the batch.
@@ -418,7 +430,7 @@ async function step(id: number): Promise<void> {
     nextAt: Date.now() + Math.max(outcome.wait ?? 0, trackerOf(job.to_service)?.batchGapMs ?? 0),
     lastError: outcome.error ?? null,
   });
-  if (outcome.sent) {
+  if (outcome.sent && !home) {
     const { noteActivity } = require('../trackerActivity');
     const [one, many] = NOUNS[what];
     void noteActivity({
@@ -438,6 +450,7 @@ async function step(id: number): Promise<void> {
 async function finish(job: any): Promise<void> {
   // A stop or pause pressed while the last batch was out stays as it was.
   if (!(await database.updateCopyJob(job.id, { status: 'done', finishedAt: Date.now(), lastError: null }, 'running'))) return;
+  if (job.to_service === HERE) return;
   const stored = await database.getUserConfig(job.user_uuid).catch(() => null);
   const config = stored ? { ...scopeConfigToProfile(stored, job.user_uuid, job.profile || null), userUUID: job.user_uuid } : null;
   const credential = config ? credentialFor(config, job.to_service) : undefined;

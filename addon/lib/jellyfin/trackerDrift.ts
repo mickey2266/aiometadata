@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
+import consola from 'consola';
+import { LRUCache } from 'lru-cache';
 import { envInt } from '../../utils/envNumber';
 import { yieldEvery } from '../../utils/yieldEvery';
 import { parseStremioId } from './idsCodec';
 import { bulkTimes } from './bulkMarks';
 import { groupBySpelling, getPlaystatesAcross, upsertPlaystateEverywhere, videoIdAliases } from './aliases';
 import { scopeConfigToProfile } from './profiles';
-import { credentialFor, type Capable } from './trackerSource';
+import { CAPABLE, credentialFor, type Capable } from './trackerSource';
 import { isAnimeList, trackerOf } from '../trackers';
 import { trackerConfig } from '../accounts';
 
+const logger = consola.withTag('Trackers');
 const database: any = require('../database');
 const idMappings: any = require('../id-mappings');
 
@@ -45,6 +48,8 @@ export interface Drift {
   ahead: Viewing[];
   rewatched: Viewing[];
   unread: number;
+  /** Watches made here that a read now could judge, which the last read was too early for. */
+  due: boolean;
   since: number;
   readAt: number | null;
 }
@@ -90,7 +95,7 @@ export function furthestPerEntry(service: string, viewings: Viewing[], scope: (v
   return [...furthest.values()].map(({ viewing }) => viewing);
 }
 
-async function ownViewings(userUUID: string, profiles: Set<string>): Promise<Viewing[]> {
+async function ownViewings(userUUID: string, profiles: Set<string>, config: any): Promise<Viewing[]> {
   const rows = (await database.listWatchesByOrigin(userUUID, [...OWN_ORIGINS])).filter((row: any) => profiles.has(row.profile));
   const byMoment = new Map<string, any[]>();
   for (const row of rows) {
@@ -100,7 +105,7 @@ async function ownViewings(userUUID: string, profiles: Set<string>): Promise<Vie
   }
   const out: Viewing[] = [];
   for (const moment of byMoment.values()) {
-    for (const group of await groupBySpelling(moment)) {
+    for (const group of await groupBySpelling(moment, config)) {
       const viewing = viewingOf(group[0].profile, group[0].last_played_at, group.map((row: any) => String(row.video_id)));
       if (viewing) out.push(viewing);
     }
@@ -117,13 +122,8 @@ const coordinateOf = (id: string): string => {
 function titlesOf(id: string): string[] {
   const parsed = parseStremioId(id);
   if (!parsed) return [id];
-  const type = parsed.episode === null || parsed.episode === undefined ? 'movie' : 'series';
-  const number = parsed.base.split(':')[1];
   try {
-    const found = parsed.idType === 'imdb' ? idMappings.getByImdbId(parsed.base, type)
-      : parsed.idType === 'tmdb' ? idMappings.getByTmdbId(number, type)
-      : parsed.idType === 'tvdb' ? idMappings.getByTvdbId(number, type)
-      : null;
+    const found = idMappings.getByParsedId(parsed, parsed.episode === null || parsed.episode === undefined ? 'movie' : 'series');
     return [...new Set([parsed.base, found?.imdbId, found?.tmdbId && `tmdb:${found.tmdbId}`, found?.tvdbId && `tvdb:${found.tvdbId}`].filter(Boolean) as string[])];
   } catch {
     return [parsed.base];
@@ -132,12 +132,12 @@ function titlesOf(id: string): string[] {
 
 // An import writes every spelling of a title at one moment, but so does a list for every title of that day, and two
 // titles each known by one id look the same as one known by two; spellings join only by alias or the mapping tables.
-async function groupImported<T extends { video_id: any; last_played_at: number }>(rows: T[]): Promise<T[][]> {
-  const groups = await groupBySpelling(rows.map((row) => ({ ...row, origin: null })));
+async function groupImported<T extends { video_id: any; last_played_at: number }>(rows: T[], config: any = {}): Promise<T[][]> {
+  const groups = await groupBySpelling(rows.map((row) => ({ ...row, origin: null })), config);
   // What each id names, by itself and by its aliases, each at its own coordinate.
   const named = new Map<string, Array<{ coordinate: string; title: string }>>();
   for (const id of new Set(rows.map((row) => String(row.video_id)))) {
-    const spellings = [id, ...(await videoIdAliases(id).catch(() => [] as string[]))];
+    const spellings = [id, ...(await videoIdAliases(id, config).catch(() => [] as string[]))];
     named.set(id, spellings.flatMap((spelling) => titlesOf(spelling).map((title) => ({ coordinate: coordinateOf(spelling), title }))));
   }
   const parent = groups.map((_, i) => i);
@@ -163,7 +163,7 @@ async function groupImported<T extends { video_id: any; last_played_at: number }
   return [...joined.values()];
 }
 
-async function importedViewings(userUUID: string, profiles: Set<string>, origins: string[]): Promise<Viewing[]> {
+async function importedViewings(userUUID: string, profiles: Set<string>, origins: string[], config: any): Promise<Viewing[]> {
   if (!origins.length) return [];
   const moments = new Map<string, any[]>();
   const add = (key: string, row: any) => {
@@ -181,7 +181,7 @@ async function importedViewings(userUUID: string, profiles: Set<string>, origins
   const watched: Viewing[] = [];
   const marked: Viewing[] = [];
   for (const moment of moments.values()) {
-    for (const group of await groupImported(moment)) {
+    for (const group of await groupImported(moment, config)) {
       const viewing = viewingOf(group[0].profile, group[0].last_played_at, group.map((row: any) => String(row.video_id)));
       if (viewing) (group[0].mark ? marked : watched).push({ ...viewing, origin: group[0].from });
     }
@@ -205,6 +205,7 @@ export function belongsOn(service: string, viewing: Viewing, config: any): boole
 }
 
 export async function driftFor(userUUID: string, source: DriftSource): Promise<Drift> {
+  const config = source.scoped;
   const { indexedSnapshot, watchedAmong, seriesCountsAmong } = require('./watched');
   const { pendingWatches } = require('../trackerOutbox');
   const { sourceKeyFor } = require('./trackerMirror');
@@ -212,7 +213,7 @@ export async function driftFor(userUUID: string, source: DriftSource): Promise<D
   const since = Date.now() - driftWindowDays() * DAY_MS;
   const state = await database.getTrackerSync(sourceKey).catch(() => null);
   const readAt = Number(state?.synced_at) || null;
-  const empty: Drift = { behind: [], imported: [], leftOut: {}, ahead: [], rewatched: [], unread: 0, since, readAt };
+  const empty: Drift = { behind: [], imported: [], leftOut: {}, ahead: [], rewatched: [], unread: 0, due: false, since, readAt };
   if (!readAt || !(Number(state?.version) > 0)) return empty;
 
   const snapshot = await indexedSnapshot(source.service, source.credential, source.scoped);
@@ -220,9 +221,10 @@ export async function driftFor(userUUID: string, source: DriftSource): Promise<D
   const pending = await pendingWatches(source.service, source.credential).catch(() => []);
   const waiting = new Set<string>(pending.filter((p: any) => p.played).map((p: any) => String(p.videoId)));
   const unmarking = new Set<string>(pending.filter((p: any) => !p.played).map((p: any) => String(p.videoId)));
-  const settled = readAt - envInt('JELLYFIN_TRACKER_DRIFT_SETTLE_MINUTES', 15, 0) * 60 * 1000;
+  const settleMs = envInt('JELLYFIN_TRACKER_DRIFT_SETTLE_MINUTES', 15, 0) * 60 * 1000;
+  const settled = readAt - settleMs;
 
-  const mine = (await ownViewings(userUUID, source.keys)).map((v) => asListed(source.service, v)).filter((v) => belongsOn(source.service, v, source.scoped));
+  const mine = (await ownViewings(userUUID, source.keys, source.scoped)).map((v) => asListed(source.service, v)).filter((v) => belongsOn(source.service, v, source.scoped));
   const sent = new Map<string, number>();
   for (const row of (await database.listTrackerActivity([sourceKey], settled, 2000).catch(() => [])) as any[]) {
     if (row.kind !== 'sent' || !row.video || !WATCH_OPS.has(String(row.op))) continue;
@@ -260,7 +262,7 @@ export async function driftFor(userUUID: string, source: DriftSource): Promise<D
     const held = await watchedAmong(snapshot, [...ours, ...[...matched.values()].flat()]);
     const missing = judged.filter((v) => !v.ids.some((id) => held.has(id) || waiting.has(id) || (matched.get(id) ?? []).some((theirs) => held.has(theirs))));
     const spelled = new Map<string, string[]>();
-    for (const id of new Set(missing.flatMap((v) => v.ids))) spelled.set(id, await videoIdAliases(id).catch(() => [] as string[]));
+    for (const id of new Set(missing.flatMap((v) => v.ids))) spelled.set(id, await videoIdAliases(id, config).catch(() => [] as string[]));
     const heldElsewhere = await watchedAmong(snapshot, [...new Set([...spelled.values()].flat())]);
     const unspelled = missing.filter((v) => !v.ids.some((id) => (spelled.get(id) ?? []).some((alias) => heldElsewhere.has(alias) || waiting.has(alias))));
     const sentAs = await sendSpellings(userUUID, source, unspelled);
@@ -318,7 +320,7 @@ export async function driftFor(userUUID: string, source: DriftSource): Promise<D
   const origins = [...require('./historyTransfer').importedOrigins().keys()] as string[];
   const left = new Set<string>(((await database.listLeftOut(userUUID, sourceKey).catch(() => [])) as any[]).map((row) => `${row.profile}|${row.origin}|${row.video_id}`));
   const leftOut: Record<string, number> = {};
-  const brought = (await importedViewings(userUUID, source.keys, origins)).map((v) => asListed(source.service, v)).filter((v) => {
+  const brought = (await importedViewings(userUUID, source.keys, origins, source.scoped)).map((v) => asListed(source.service, v)).filter((v) => {
     if (!belongsOn(source.service, v, source.scoped)) return false;
     if (!v.ids.some((id) => left.has(`${v.profile}|${v.origin}|${id}`))) return true;
     leftOut[v.origin!] = (leftOut[v.origin!] ?? 0) + 1;
@@ -330,7 +332,8 @@ export async function driftFor(userUUID: string, source: DriftSource): Promise<D
     : [];
 
   const ahead = isAnimeList(source.service) ? [] : await aheadOf(userUUID, source, sourceKey, since, unmarking);
-  return { behind, imported, leftOut, ahead, rewatched, unread: mine.filter((v) => v.at > settled).length, since, readAt };
+  const unread = mine.filter((v) => v.at > settled);
+  return { behind, imported, leftOut, ahead, rewatched, unread: unread.length, due: unread.some((v) => v.at <= Date.now() - settleMs), since, readAt };
 }
 
 async function sendSpellings(userUUID: string, source: DriftSource, viewings: Viewing[]): Promise<Map<Viewing, string[]>> {
@@ -369,13 +372,16 @@ async function statesFor(userUUID: string, viewings: Viewing[]): Promise<Map<str
   return out;
 }
 
-async function aheadOf(userUUID: string, source: DriftSource, sourceKey: string, since: number, unmarking: Set<string>): Promise<Viewing[]> {
+// films: a film is also looked for under its other id, which the aliases give only for anime films.
+export async function aheadOf(userUUID: string, source: DriftSource, sourceKey: string, since: number, unmarking: Set<string>, films = false): Promise<Viewing[]> {
   const rows: any[] = await database.watchIndexSince(sourceKey, since);
+  const config = source.scoped;
   const { ourSpellings } = require('./trackerMatch');
   const candidates: Viewing[] = [];
   for (const row of rows) {
-    const ours: string[] = await ourSpellings(userUUID, source.service, String(row.video_id)).catch(() => []);
-    const ids = [...ours, String(row.video_id), ...(await videoIdAliases(String(row.video_id)).catch(() => [] as string[]))];
+    const ours: string[] = await ourSpellings(userUUID, source.service, String(row.video_id), config).catch(() => []);
+    const ids = [...ours, String(row.video_id), ...(await videoIdAliases(String(row.video_id), config).catch(() => [] as string[]))];
+    if (films && row.kind === 'movie') ids.push(...(await require('./watched').movieSpellings(String(row.video_id), config)));
     if (ids.some((id) => unmarking.has(id))) continue;
     const viewing = viewingOf('', row.at, ids);
     if (viewing) candidates.push(viewing);
@@ -387,7 +393,7 @@ async function aheadOf(userUUID: string, source: DriftSource, sourceKey: string,
   const states = new Map<string, Map<string, any>>();
   for (const profile of source.keys) {
     seen.set(profile, new Set((await database.listWatchesFor(userUUID, profile, spellings)).map((w: any) => String(w.video_id))));
-    states.set(profile, await getPlaystatesAcross(userUUID, spellings, profile));
+    states.set(profile, await getPlaystatesAcross(userUUID, spellings, profile, config));
   }
   for (const viewing of candidates) {
     const here = [...source.keys].some((profile) => viewing.ids.some((id) => {
@@ -502,11 +508,17 @@ export async function pullDrift(userUUID: string, source: DriftSource, viewings:
     await pause();
     const video = spellingFor(source.service, viewing.ids);
     for (const profile of source.keys) {
-      const row = (await getPlaystatesAcross(userUUID, [video], profile)).get(video);
+      const row = (await getPlaystatesAcross(userUUID, [video], profile, source.scoped)).get(video);
+      // A watch the tracker has no date for marks the title played and logs no viewing.
+      if (!(viewing.at > 0)) {
+        if (!row || Number(row.played) !== 1) await upsertPlaystateEverywhere(userUUID, video, { positionMs: 0, played: true, lastPlayedAt: null, origin: source.service }, profile, viewing.ids, source.scoped);
+        added += 1;
+        continue;
+      }
       if (row && Number(row.played) === 1) {
         for (const id of viewing.ids) await database.logWatch(userUUID, profile, id, { at: viewing.at, kind: 'dated' }, true, source.service);
       } else {
-        await upsertPlaystateEverywhere(userUUID, video, { positionMs: 0, played: true, lastPlayedAt: viewing.at, lastPlayedKind: bulk.get(viewing.profile)?.has(viewing.at) ? 'mark' : 'viewing', origin: source.service, watch: { at: viewing.at, kind: 'dated' } }, profile, viewing.ids);
+        await upsertPlaystateEverywhere(userUUID, video, { positionMs: 0, played: true, lastPlayedAt: viewing.at, lastPlayedKind: bulk.get(viewing.profile)?.has(viewing.at) ? 'mark' : 'viewing', origin: source.service, watch: { at: viewing.at, kind: 'dated' } }, profile, viewing.ids, source.scoped);
       }
       added += 1;
     }
@@ -525,15 +537,14 @@ export async function keepsRewatches(source: { service: string; credential: stri
   return kept ? kept(source.credential) : true;
 }
 
-const recovering = new Map<string, number>();
+const recovering = new LRUCache<string, number>({ max: 20000, ttl: 24 * 60 * 60 * 1000 });
 
-export async function recoverFailed(sourceKey: string, service: Capable): Promise<number> {
-  const now = Date.now();
-  if (now - (recovering.get(sourceKey) ?? 0) < envInt('JELLYFIN_TRACKER_RECOVER_MINUTES', 10, 1) * 60 * 1000) return 0;
-  recovering.set(sourceKey, now);
-  const { readGlobalCache, writeGlobalCache } = require('../getCache');
-  const since = now - driftWindowDays() * DAY_MS;
-  const failed = ((await database.listTrackerActivity([sourceKey], since, 2000)) as any[]).filter((row) => {
+const recoverMs = () => envInt('JELLYFIN_TRACKER_RECOVER_MINUTES', 10, 1) * 60 * 1000;
+
+/** Watch writes to this account that gave up on an answer a later read may get past, and were not sent again since. */
+async function owedWrites(sourceKey: string): Promise<any[]> {
+  const { readGlobalCache } = require('../getCache');
+  const failed = ((await database.listTrackerActivity([sourceKey], Date.now() - driftWindowDays() * DAY_MS, 2000, 'failed')) as any[]).filter((row) => {
     if (row.kind !== 'failed' || !row.video || !row.user_uuid || !WATCH_OPS.has(String(row.op))) return false;
     try {
       return passing(JSON.parse(row.detail ?? '{}'));
@@ -541,10 +552,37 @@ export async function recoverFailed(sourceKey: string, service: Capable): Promis
       return false;
     }
   });
+  const owed: any[] = [];
+  for (const row of failed) if (!(await readGlobalCache(`tracker_recovered:${row.id}`))) owed.push(row);
+  return owed;
+}
+
+const answered = new LRUCache<string, number>({ max: 20000, ttl: 24 * 60 * 60 * 1000 });
+
+/** A write that landed shows the account answers again, so one it gave up on earlier is read for and sent again. */
+export function recoverWhenAnswering(service: string, config: any): void {
+  if (!(CAPABLE as readonly string[]).includes(service)) return;
+  const credential = credentialFor(config, service as Capable);
+  if (!credential) return;
+  const { sourceKeyFor, syncMirror } = require('./trackerMirror');
+  const sourceKey = sourceKeyFor(service, credential);
+  const now = Date.now();
+  if (now - (answered.get(sourceKey) ?? 0) < recoverMs()) return;
+  answered.set(sourceKey, now);
+  // The read resends what is still missing once it lands.
+  void owedWrites(sourceKey)
+    .then((owed) => (owed.length ? syncMirror(service, credential, config) : 0))
+    .catch((error: any) => logger.debug(`Could not read ${service} to resend the writes it missed: ${error?.message || error}`));
+}
+
+export async function recoverFailed(sourceKey: string, service: Capable): Promise<number> {
+  const now = Date.now();
+  if (now - (recovering.get(sourceKey) ?? 0) < recoverMs()) return 0;
+  recovering.set(sourceKey, now);
+  const { writeGlobalCache } = require('../getCache');
   let queued = 0;
   const byOwner = new Map<string, any[]>();
-  for (const row of failed) {
-    if (await readGlobalCache(`tracker_recovered:${row.id}`)) continue;
+  for (const row of await owedWrites(sourceKey)) {
     const owner = `${row.user_uuid}|${row.profile ?? ''}`;
     byOwner.set(owner, [...(byOwner.get(owner) ?? []), row]);
   }

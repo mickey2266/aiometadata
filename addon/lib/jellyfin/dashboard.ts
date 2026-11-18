@@ -17,11 +17,15 @@ import { isMatchable, scrobblingTrackers, trackerName, trackerOf, type Mark } fr
 import { sourceOfApp } from '../playSources';
 import { shouldTrackServiceMediaType } from '../watchTracking';
 import { sourceKeyFor } from './trackerMirror';
+import { HERE } from './trackerCopyHome';
 import { rewatchGapMs } from './bulkMarks';
 import { mapWithConcurrency } from '../../utils/concurrency';
 import redis from '../redisClient';
 
 const database: any = require('../database');
+
+// The cached copy is shared by every reader; these handlers only read it.
+const storedConfig = (userUUID: string): Promise<any> => require('../configApi').loadSharedConfig(userUUID).catch(() => null);
 
 export interface PlayRow {
   profile: string;
@@ -124,9 +128,10 @@ async function describe(userUUID: string, videoId: string): Promise<Named> {
       const video = index?.videos.find((v) => v.id === videoId)
         ?? index?.videos.find((v) => v.episode === parsed.episode && (parsed.season === null ? v.season === null : v.season === parsed.season));
       const number = parsed.season === null || parsed.season === undefined ? `E${parsed.episode}` : `S${parsed.season}E${parsed.episode}`;
-      const { videoIdAliases } = require('./aliases');
-      const keys = [videoId, ...(await videoIdAliases(videoId))];
-      if (video?.id) keys.push(video.id, ...(await videoIdAliases(video.id)));
+      const { aliasConfigFor, videoIdAliases } = require('./aliases');
+      const config = await aliasConfigFor(userUUID);
+      const keys = [videoId, ...(await videoIdAliases(videoId, config))];
+      if (video?.id) keys.push(video.id, ...(await videoIdAliases(video.id, config)));
       out = {
         keys,
         title: index?.name ?? videoId,
@@ -314,14 +319,14 @@ export async function dashboardSearch(query: string): Promise<{ query: string; r
     const needle = q.toLowerCase();
     const seen = ((await seenConfigurations()) ?? []).slice(0, envInt('JELLYFIN_DASHBOARD_NAME_SCAN_MAX', 200, 1));
     const matched = await mapWithConcurrency(seen, envInt('JELLYFIN_DASHBOARD_SEARCH_CONCURRENCY', 8, 1), async (uuid: string) => {
-      const config = await database.getUserConfig(uuid).catch(() => null);
+      const config = await storedConfig(uuid);
       return config && listProfiles(config, uuid).some((p) => p.name.toLowerCase().includes(needle)) ? uuid : null;
     });
     for (const uuid of matched) if (uuid && candidates.size < limit) candidates.add(uuid);
   }
 
   const results = (await mapWithConcurrency([...candidates].slice(0, limit), 4, async (uuid: string): Promise<SearchRow | null> => {
-    const config = await database.getUserConfig(uuid).catch(() => null);
+    const config = await storedConfig(uuid);
     if (!config) return null;
     const byProfile: any[] = await database.playstateForConfiguration(uuid);
     const lastActivity = byProfile.reduce((at: number, p: any) => Math.max(at, Number(p.last_played_at) || 0, Number(p.updated_at) || 0), 0) || null;
@@ -392,7 +397,7 @@ const stillGood = (held: StatsMark, now: StatsMark): boolean =>
   held.counts === now.counts && (held.moment === now.moment
     || now.at - held.at < envInt('JELLYFIN_DASHBOARD_STATS_PLAYING_SECONDS', 300, 0) * 1000);
 
-const statsStoreKey = (userUUID: string) => `jf:dashstats:v4:${userUUID}`;
+const statsStoreKey = (userUUID: string) => `jf:dashstats:v5:${userUUID}`;
 
 async function storedStats(userUUID: string): Promise<(StatsMark & { stats: Map<string, ProfileStats> }) | null> {
   if (!redis) return null;
@@ -494,12 +499,13 @@ async function readStatsRows(userUUID: string, profile: string, watchedMs: numbe
 async function readProfileStats(userUUID: string, profiles: string[]): Promise<Map<string, ProfileStats>> {
   const since = Date.now() - ACTIVITY_DAYS * 24 * 60 * 60 * 1000;
   const watchedMs = envInt('JELLYFIN_DASHBOARD_WATCHED_MINUTES', 5, 1) * 60_000;
-  const { spellingRoots } = require('./aliases');
+  const { aliasConfigFor, spellingRoots } = require('./aliases');
+  const config = await aliasConfigFor(userUUID);
   const out = new Map<string, ProfileStats>();
   for (const profile of profiles) {
     const { ids, times, flags } = await readStatsRows(userUUID, profile, watchedMs);
     if (!ids.length) continue;
-    const rootOf: (id: string) => string = await spellingRoots(ids, (i: number) => (flags[i] & WRITTEN_HERE ? times[i] : null), true);
+    const rootOf: (id: string) => string = await spellingRoots(ids, (i: number) => (flags[i] & WRITTEN_HERE ? times[i] : null), true, config);
     const titles = new Map<string, { id: string; flags: number; at: number; finishes: Set<number> | null }>();
     const known = new Set(ids);
     for (let i = 0; i < ids.length; i += 1) {
@@ -612,7 +618,7 @@ const parseDetail = (value: unknown): Record<string, any> => {
 };
 
 export async function dashboardSync(userUUID: string, viewer: string | null): Promise<any | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   if (!config) return null;
   const profile = historyKeyOf(config, userUUID, viewer);
   const sources = syncSources(config, userUUID, profile);
@@ -709,7 +715,7 @@ export async function dashboardSync(userUUID: string, viewer: string | null): Pr
 }
 
 export async function dashboardSyncNow(userUUID: string, key: string, full: boolean): Promise<{ ms: number; changed: boolean } | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   const source = config ? syncSources(config, userUUID).get(key) : null;
   if (!source) return null;
   const { syncMirror } = require('./trackerMirror');
@@ -721,7 +727,7 @@ export async function dashboardSyncNow(userUUID: string, key: string, full: bool
 }
 
 export async function dashboardOutbox(userUUID: string, action: 'retry' | 'drop', ids: number[]): Promise<number | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   if (!config) return null;
   forgetDrift(userUUID);
   if (action === 'retry') {
@@ -752,6 +758,27 @@ const driftEpochs = new Map<string, number>();
 function forgetDrift(userUUID: string): void {
   driftEpochs.set(userUUID, (driftEpochs.get(userUUID) ?? 0) + 1);
   for (const key of [...drifts.keys()]) if (key.startsWith(`${userUUID}|`)) drifts.delete(key);
+}
+
+const behindReads = new LRUCache<string, number>({ max: 20000, ttl: 24 * 60 * 60 * 1000 });
+const readingBehind = new Set<string>();
+
+// A tracker read only while someone looks at its comparison costs nothing for the many who never do; one read
+// per settle window is all a comparison can use, since a write is judged only once that long has passed.
+function readBehind(userUUID: string, key: string, source: SyncSource): boolean {
+  if (readingBehind.has(key)) return true;
+  const gapMs = Math.max(1, envInt('JELLYFIN_TRACKER_DRIFT_SETTLE_MINUTES', 15, 0)) * 60 * 1000;
+  if (Date.now() - (behindReads.get(key) ?? 0) < gapMs) return false;
+  behindReads.set(key, Date.now());
+  readingBehind.add(key);
+  const { syncMirror } = require('./trackerMirror');
+  syncMirror(source.service, source.credential, source.scoped)
+    .catch(() => 0)
+    .finally(() => {
+      readingBehind.delete(key);
+      forgetDrift(userUUID);
+    });
+  return true;
 }
 
 async function driftOf(userUUID: string, key: string, source: SyncSource): Promise<any> {
@@ -846,7 +873,7 @@ async function importGroups(userUUID: string, source: SyncSource, outcomes: Map<
 }
 
 export async function dashboardDrift(userUUID: string, viewer: string | null): Promise<any | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   if (!config) return null;
   const profile = historyKeyOf(config, userUUID, viewer);
   const memoKey = `${userUUID}|${profile ?? '*'}`;
@@ -861,9 +888,10 @@ export async function dashboardDrift(userUUID: string, viewer: string | null): P
       const outcomes = await driftOutcomes(key);
       const items = (viewings: any[]) => driftItems(userUUID, source, outcomes, viewings);
       const rewatchNote = drift.rewatched.length && !(await keepsRewatches(source)) ? 'free' : null;
-      return { key, behind: await items(drift.behind), imported: await importGroups(userUUID, source, outcomes, drift), ahead: await items(drift.ahead), rewatched: await items(drift.rewatched), rewatchNote, unread: drift.unread, readAt: drift.readAt, error: null };
+      const reading = drift.due ? readBehind(userUUID, key, source) : readingBehind.has(key);
+      return { key, behind: await items(drift.behind), imported: await importGroups(userUUID, source, outcomes, drift), ahead: await items(drift.ahead), rewatched: await items(drift.rewatched), rewatchNote, unread: drift.unread, readAt: drift.readAt, reading, error: null };
     } catch (error: any) {
-      return { key, behind: [], imported: [], ahead: [], rewatched: [], rewatchNote: null, unread: 0, readAt: null, error: String(error?.message || error).slice(0, 200) };
+      return { key, behind: [], imported: [], ahead: [], rewatched: [], rewatchNote: null, unread: 0, readAt: null, reading: readingBehind.has(key), error: String(error?.message || error).slice(0, 200) };
     }
   });
   const out = { checkedAt: Date.now(), days: driftWindowDays(), lanes };
@@ -872,7 +900,7 @@ export async function dashboardDrift(userUUID: string, viewer: string | null): P
 }
 
 export async function dashboardDriftImported(userUUID: string, key: string, origin: string, viewer: string | null): Promise<any[] | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   const source = config ? syncSources(config, userUUID, historyKeyOf(config, userUUID, viewer)).get(key) : null;
   if (!source) return null;
   const drift = await driftOf(userUUID, key, source);
@@ -884,7 +912,7 @@ function keepsRewatches(source: SyncSource): Promise<boolean> {
 }
 
 export async function dashboardDriftAction(userUUID: string, key: string, action: 'push' | 'pull' | 'leave' | 'restore', items: string[] | null, origin: string | null = null, viewer: string | null = null): Promise<number | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   const source = config ? syncSources(config, userUUID, historyKeyOf(config, userUUID, viewer)).get(key) : null;
   if (!source) return null;
   if (action === 'restore') {
@@ -909,16 +937,13 @@ export async function dashboardDriftAction(userUUID: string, key: string, action
   const done = action === 'push'
     ? await pushDrift(userUUID, config, driftSource, [...(origin ? [] : drift.behind), ...brought].filter(wanted), again)
     : await pullDrift(userUUID, driftSource, drift.ahead.filter(wanted));
-  forgetDrift(userUUID);
-  if (action === 'pull') {
-    forgetMemos(userUUID);
-    require('./resume').invalidateResume(userUUID);
-  }
+  if (action === 'pull') forgetPulled(userUUID);
+  else forgetDrift(userUUID);
   return done;
 }
 
 export async function dashboardDriftItem(userUUID: string, key: string, side: 'behind' | 'ahead', video: string, bases: string[]): Promise<any | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   const source = config ? syncSources(config, userUUID).get(key) : null;
   const { parseStremioId } = require('./idsCodec');
   const parsed = parseStremioId(video);
@@ -933,7 +958,7 @@ export async function dashboardDriftItem(userUUID: string, key: string, side: 'b
   const match = isMatchable(source.service)
     ? (await Promise.all(shows.map((base) => matchFor(userUUID, source.service, base).catch(() => null)))).find(Boolean) ?? null
     : null;
-  const aliases: string[] = await videoIdAliases(video).catch(() => []);
+  const aliases: string[] = await videoIdAliases(video, config).catch(() => []);
   // An episode matched to a film there is sent, and looked for, as that film.
   const film = isMatchable(source.service) && parsed.episode !== null && parsed.episode !== undefined
     ? await require('./trackerMatch').filmFor(userUUID, source.service, [video, ...aliases]).catch(() => null)
@@ -1031,7 +1056,7 @@ export async function dashboardDriftItem(userUUID: string, key: string, side: 'b
 }
 
 async function matchSource(userUUID: string, key: string): Promise<SyncSource | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   const source = config ? syncSources(config, userUUID).get(key) ?? null : null;
   return source && isMatchable(source.service) ? source : null;
 }
@@ -1097,7 +1122,7 @@ async function saveFilmMatch(userUUID: string, key: string, source: SyncSource, 
   if (!parsed || parsed.episode === null || parsed.episode === undefined || target.kind === 'tv') return null;
   const film = { ids: target.ids, title: target.title, year: target.year, posterUrl: target.posterUrl, kind: 'movie' };
   if (!filmSpelling(film)) return null;
-  const spellings = [video, ...((await videoIdAliases(video).catch(() => [])) as string[])];
+  const spellings = [video, ...((await videoIdAliases(video, source.scoped).catch(() => [])) as string[])];
   const bases = [...new Set(spellings.filter((id) => {
     const spelled = parseStremioId(id);
     return spelled && spelled.episode !== null && spelled.episode !== undefined;
@@ -1175,13 +1200,15 @@ function copySide(source: SyncSource, key: string): any {
 }
 
 async function copyPair(userUUID: string, viewer: string | null, fromKey: string, toKey: string, what: string): Promise<{ from: SyncSource; to: SyncSource } | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   if (!config || fromKey === toKey) return null;
   const sources = syncSources(config, userUUID, historyKeyOf(config, userUUID, viewer));
   const from = sources.get(fromKey);
+  const source = from ? trackerOf(from.service) : undefined;
+  // The history here fills the profiles the tracker is read for.
+  if (toKey === HERE) return from && what === 'watches' && source?.datedHistory ? { from, to: { ...from, service: HERE } } : null;
   const to = sources.get(toKey);
   if (!from || !to) return null;
-  const source = trackerOf(from.service);
   if (what === 'watches') return source?.datedHistory ? { from, to } : null;
   return source?.marks.from.includes(what as Mark) && trackerOf(to.service)?.marks.to.includes(what as Mark) ? { from, to } : null;
 }
@@ -1298,7 +1325,7 @@ function smallAvatar(url: string | null | undefined): string | null {
 
 /** One configuration: its profiles with counts, and the sessions, positions and recent plays of one profile or all. */
 export async function dashboardConfiguration(userUUID: string, profile: string | null, rows?: number, offsetMinutes = 0): Promise<any> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   if (!config) return null;
   const names = profileNames(config, userUUID);
   const limit = Math.min(100, Math.max(1, rows || envInt('JELLYFIN_DASHBOARD_ROWS', 30, 1)));
@@ -1369,7 +1396,7 @@ async function foldedPlays(userUUID: string, names: Map<string, string>, kind: P
 }
 
 export async function dashboardPlays(userUUID: string, profile: string | null, kind: PlayKind, offset: number, limit: number): Promise<any | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   if (!config) return null;
   const from = Math.max(0, offset);
   const size = Math.min(100, Math.max(1, limit));
@@ -1897,7 +1924,7 @@ async function titleWatches(userUUID: string, config: any, meta: any, item: any,
   }
   await mapWithConcurrency(episodes, 8, async (ep: any) => {
     const own = await videoOf(ep.Id);
-    if (own) spellings.set(String(ep.Id), [own, ...(await videoIdAliases(own).catch(() => [] as string[]))]);
+    if (own) spellings.set(String(ep.Id), [own, ...(await videoIdAliases(own, config).catch(() => [] as string[]))]);
   });
   const rows = await database.listWatchesFor(userUUID, profileKey(config), [...spellings.values()].flat());
   const byVideo = new Map<string, number[]>();
@@ -2079,7 +2106,7 @@ export async function dashboardTitleAction(userUUID: string, profile: string | n
 }
 
 export async function dashboardClearResume(userUUID: string, profileKey: string, videoId: string): Promise<boolean | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   if (!config) return null;
   const { parseStremioId } = require('./idsCodec');
   if (!parseStremioId(videoId)) return false;
@@ -2098,6 +2125,13 @@ function forgetMemos(userUUID: string): void {
   for (const key of [...droppedMemo.keys()]) if (key.startsWith(`${userUUID}:`)) droppedMemo.delete(key);
 }
 
+/** After watches are brought in from a tracker, so the comparison, shelves and resume row read them. */
+export function forgetPulled(userUUID: string): void {
+  forgetDrift(userUUID);
+  forgetMemos(userUUID);
+  require('./resume').invalidateResume(userUUID);
+}
+
 export async function dashboardWatchDate(userUUID: string, profile: string | null, itemId: string, from: number | null, to: number): Promise<boolean | null> {
   const { runInViewerScope } = require('./viewer');
   return runInViewerScope(false, async () => {
@@ -2112,12 +2146,12 @@ export async function dashboardWatchDate(userUUID: string, profile: string | nul
 }
 
 export async function dashboardSameViewing(userUUID: string, profileKey: string, video: string, at: number, theirs: number): Promise<boolean | 'invalid' | null> {
-  const config = await database.getUserConfig(userUUID).catch(() => null);
+  const config = await storedConfig(userUUID);
   if (!config) return null;
   if (!parseStremioId(video) || !(theirs > 0) || !(at > theirs)) return 'invalid';
   if (profileKey && !listProfiles(config, userUUID).some((p) => p.id === profileKey)) return 'invalid';
   const { videoIdAliases } = require('./aliases');
-  const spellings = [video, ...(await videoIdAliases(video).catch(() => [] as string[]))];
+  const spellings = [video, ...(await videoIdAliases(video, config).catch(() => [] as string[]))];
   const gap = envInt('JELLYFIN_TRACKER_REWATCH_GAP_HOURS', 48, 48) * 60 * 60 * 1000;
   const own: number[] = ((await database.listWatchesFor(userUUID, profileKey, spellings)) as any[]).map((row) => Number(row.watched_at));
   const kept = own

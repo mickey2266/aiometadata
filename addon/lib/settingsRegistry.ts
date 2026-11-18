@@ -4,6 +4,9 @@ import { DEFAULT_CACHE_EPOCH } from './cacheEpoch';
 import { parseProviderPolicies } from './posterCache/config';
 import { isWindowValue } from './runWindow';
 import { availableParallelism } from 'os';
+import { ENGINES } from '../utils/webSearch/engines';
+
+const WEB_SEARCH_CHOICES = ['off', ...ENGINES.map((engine) => engine.id)];
 
 export interface DisabledRule {
   settingKey: string;
@@ -105,6 +108,75 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     type: 'string',
     default: '',
     sensitive: true,
+  },
+  {
+    key: 'OPENROUTER_BASE_URL',
+    envVar: 'OPENROUTER_BASE_URL',
+    label: 'OpenRouter-Compatible Base URL',
+    description: 'Sends every OpenRouter request to another OpenAI-compatible API instead, such as LiteLLM, Ollama or vLLM, e.g. http://litellm:4000/v1. Users then enter that API\'s key and model names in the OpenRouter fields. OpenRouter web search and presets are unavailable there. An API that takes any key is open to every user of this instance. Empty uses OpenRouter.',
+    category: 'API Keys',
+    type: 'string',
+    default: '',
+    validate: (value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) return true;
+      try {
+        const { protocol } = new URL(trimmed);
+        return protocol === 'http:' || protocol === 'https:';
+      } catch {
+        return false;
+      }
+    },
+  },
+  {
+    key: 'WEB_SEARCH_ENGINE',
+    envVar: 'WEB_SEARCH_ENGINE',
+    label: 'Web Search Engine',
+    description: 'A web search engine this instance offers every user for AI search and recommendations, so they need no key of their own. It searches the web and hands the model what it found, so any model can use it. Users with a key of their own for an engine\'s hosted API can use it either way.',
+    category: 'API Keys',
+    type: 'select',
+    options: WEB_SEARCH_CHOICES,
+    default: 'off',
+    validate: (value: string) => WEB_SEARCH_CHOICES.includes(value.trim()),
+  },
+  {
+    key: 'WEB_SEARCH_URL',
+    envVar: 'WEB_SEARCH_URL',
+    label: 'Web Search Server URL',
+    description: 'The engine\'s server of this instance\'s own, e.g. http://searxng:8080 or http://crw:3000. Empty uses the engine\'s hosted API with the key below.',
+    category: 'API Keys',
+    type: 'string',
+    default: '',
+    validate: (value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) return true;
+      try {
+        const { protocol } = new URL(trimmed);
+        return protocol === 'http:' || protocol === 'https:';
+      } catch {
+        return false;
+      }
+    },
+  },
+  {
+    key: 'WEB_SEARCH_API_KEY',
+    envVar: 'WEB_SEARCH_API_KEY',
+    label: 'Web Search API Key',
+    description: 'A key for the engine\'s hosted API that this instance pays for, used by users who have none of their own.',
+    category: 'API Keys',
+    type: 'string',
+    default: '',
+    sensitive: true,
+  },
+  {
+    key: 'WEB_SEARCH_CACHE_HOURS',
+    envVar: 'WEB_SEARCH_CACHE_HOURS',
+    label: 'Web Search Cache Hours',
+    description: 'How long a web search is reused for the same query, by every user, before it runs again.',
+    category: 'Cache',
+    type: 'number',
+    default: 12,
+    min: 1,
   },
   {
     key: 'BUILT_IN_TMDB_API_KEY',
@@ -3387,7 +3459,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'How many configurations\' watched snapshots are held in memory.',
     category: 'Cache',
     type: 'number',
-    default: 200,
+    default: 1000,
     min: 1,
   },
   {

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 cedya77 and AIOMetadata contributors, see NOTICE
 import { LRUCache } from 'lru-cache';
 import { parseStremioId } from './idsCodec';
-import { videoIdAliases } from './aliases';
+import { aliasConfigFor, videoIdAliases } from './aliases';
 import { isMatchable as matchable, trackerOf } from '../trackers';
 import { noteUnreadable } from '../../utils/trackerCalls';
 import type { EpisodeRef, MatchCandidate, MatchDetail, TargetSeason } from '../trackers/match';
@@ -47,7 +47,9 @@ interface Index {
 }
 
 const indexes = new LRUCache<string, Index>({ max: 500, ttl: 10 * 60 * 1000 });
-const epochs = new Map<string, number>();
+// Numbered from one counter, so a key forgotten here and seen again never repeats a number it had.
+const epochs = new LRUCache<string, number>({ max: 20000, ttl: 6 * 60 * 60 * 1000, updateAgeOnGet: true });
+let lastEpoch = 0;
 
 function theirBases(target: MatchTarget): string[] {
   const out: string[] = [];
@@ -103,7 +105,7 @@ async function indexFor(userUUID: string, service: string): Promise<Index> {
 /** Matches written outside saveMatch and removeMatch are read again. */
 export function forgetMatches(userUUID: string, service: string): void {
   const key = `${userUUID}|${service}`;
-  epochs.set(key, (epochs.get(key) ?? 0) + 1);
+  epochs.set(key, ++lastEpoch);
   indexes.delete(key);
 }
 
@@ -136,7 +138,8 @@ export async function filmFor(userUUID: string | undefined, service: string, ids
   if (!userUUID || !matchable(service) || !ids.length) return null;
   const index = await indexFor(userUUID, service);
   if (!index.films) return null;
-  const spellings = withAliases ? [...new Set([...ids, ...(await Promise.all(ids.map((id) => videoIdAliases(id).catch(() => [] as string[])))).flat()])] : ids;
+  const aliasConfig = withAliases ? await aliasConfigFor(userUUID) : {};
+  const spellings = withAliases ? [...new Set([...ids, ...(await Promise.all(ids.map((id) => videoIdAliases(id, aliasConfig).catch(() => [] as string[])))).flat()])] : ids;
   for (const id of spellings) {
     const match = index.byBase.get(id);
     if (match?.kind !== 'episode') continue;
@@ -260,19 +263,19 @@ const openedBase = (match: TrackerMatch): string | null => (match.open ? parseSt
 const sameNumbering = (a: string, b: string) => ANIME_SCHEME.test(a) === ANIME_SCHEME.test(b);
 
 // A match numbers episodes as the title it was made on lists them, so another spelling of that title is renumbered into it first.
-async function asOpened(match: TrackerMatch, base: string, season: number, episode: number): Promise<EpisodeRef | null> {
+async function asOpened(match: TrackerMatch, base: string, season: number, episode: number, config: any = {}): Promise<EpisodeRef | null> {
   const opened = openedBase(match);
   if (!opened || opened === base) return { season, episode };
-  for (const alias of await videoIdAliases(spelled(base, season, episode)).catch(() => [] as string[])) {
+  for (const alias of await videoIdAliases(spelled(base, season, episode), config).catch(() => [] as string[])) {
     const parsed = parseStremioId(alias);
     if (parsed?.base === opened && parsed.episode !== null && parsed.episode !== undefined) return { season: parsed.season ?? 1, episode: parsed.episode };
   }
   return sameNumbering(base, opened) ? { season, episode } : null;
 }
 
-async function ourSpelled(match: TrackerMatch, ours: EpisodeRef): Promise<string[]> {
+async function ourSpelled(match: TrackerMatch, ours: EpisodeRef, config: any = {}): Promise<string[]> {
   const opened = openedBase(match);
-  const aliases = opened ? await videoIdAliases(spelled(opened, ours.season, ours.episode)).catch(() => [] as string[]) : [];
+  const aliases = opened ? await videoIdAliases(spelled(opened, ours.season, ours.episode), config).catch(() => [] as string[]) : [];
   return match.bases.flatMap((base) =>
     !opened || base === opened || sameNumbering(base, opened) ? [spelled(base, ours.season, ours.episode)] : aliases.filter((alias) => parseStremioId(alias)?.base === base)
   );
@@ -287,7 +290,7 @@ export async function matchedTarget(userUUID: string | undefined, service: strin
   const match = await matchFor(userUUID, service, base);
   if (!match) return null;
   if (match.kind === 'movie' || episode === undefined || episode === null) return { ids: { ...match.target.ids } };
-  const ours = await asOpened(match, base, season ?? 1, episode);
+  const ours = await asOpened(match, base, season ?? 1, episode, await aliasConfigFor(userUUID));
   if (!ours) return null;
   if (sendsNothing(match, ours.season, ours.episode)) return { ids: { ...match.target.ids }, unsent: true };
   const theirs = theirEpisode(match, ours.season, ours.episode);
@@ -299,13 +302,14 @@ export async function unsentAmong(userUUID: string | undefined, service: string,
   if (!userUUID || !matchable(service)) return out;
   const index = await indexFor(userUUID, service);
   if (!index.byBase.size) return out;
+  const aliasConfig = await aliasConfigFor(userUUID);
   for (const id of ids) {
     // An episode sent as a film is sent, whatever the show's match says of it.
     if (index.byBase.get(id)?.kind === 'episode') continue;
     const parsed = parseStremioId(id);
     const match = parsed ? index.byBase.get(parsed.base) : null;
     if (!parsed || !match || parsed.episode === null || parsed.episode === undefined) continue;
-    const ours = await asOpened(match, parsed.base, parsed.season ?? 1, parsed.episode);
+    const ours = await asOpened(match, parsed.base, parsed.season ?? 1, parsed.episode, aliasConfig);
     if (ours && sendsNothing(match, ours.season, ours.episode)) out.add(id);
   }
   return out;
@@ -316,6 +320,7 @@ export async function theirSpellings(userUUID: string, service: string, ids: str
   if (!matchable(service)) return out;
   const index = await indexFor(userUUID, service);
   if (!index.byBase.size) return out;
+  const aliasConfig = await aliasConfigFor(userUUID);
   for (const id of ids) {
     const film = index.byBase.get(id);
     if (film?.kind === 'episode') {
@@ -330,17 +335,18 @@ export async function theirSpellings(userUUID: string, service: string, ids: str
       out.set(id, bases);
       continue;
     }
-    const ours = await asOpened(match, parsed.base, parsed.season ?? 1, parsed.episode);
+    const ours = await asOpened(match, parsed.base, parsed.season ?? 1, parsed.episode, aliasConfig);
     const theirs = ours ? theirEpisode(match, ours.season, ours.episode) : null;
     if (theirs) out.set(id, bases.map((base) => `${base}:${theirs.season}:${theirs.episode}`));
   }
   return out;
 }
 
-export async function ourSpellings(userUUID: string, service: string, id: string): Promise<string[]> {
+export async function ourSpellings(userUUID: string, service: string, id: string, config?: any): Promise<string[]> {
   if (!matchable(service)) return [];
   const index = await indexFor(userUUID, service);
   if (!index.byTheirs.size) return [];
+  const aliasConfig = config ?? (await aliasConfigFor(userUUID));
   const parsed = parseStremioId(id);
   const matches = parsed ? index.byTheirs.get(parsed.base) : null;
   if (!parsed || !matches?.length) return [];
@@ -351,7 +357,7 @@ export async function ourSpellings(userUUID: string, service: string, id: string
       continue;
     }
     if (match.kind === 'episode') continue;
-    for (const ours of ourEpisodes(match, parsed.season ?? 1, parsed.episode)) out.push(...(await ourSpelled(match, ours)));
+    for (const ours of ourEpisodes(match, parsed.season ?? 1, parsed.episode)) out.push(...(await ourSpelled(match, ours, aliasConfig)));
   }
   return out;
 }
